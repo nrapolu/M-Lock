@@ -66,7 +66,7 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 		implements WALManagerProtocol {
 	private static final Log LOG = LogFactory
 			.getLog("ham.wal.WALManagerEndpoint");
-	private final ConcurrentHashMap<HashedBytes, CountDownLatch> lockedRows = new ConcurrentHashMap<HashedBytes, CountDownLatch>();
+	public static final ConcurrentHashMap<HashedBytes, CountDownLatch> lockedRows = new ConcurrentHashMap<HashedBytes, CountDownLatch>();
 
 	protected ConcurrentHashMap<String, TreeMap<Long, byte[]>> myKVSpace = new ConcurrentHashMap<String, TreeMap<Long, byte[]>>();
 
@@ -83,7 +83,7 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 	private boolean stopped = false;
 
 	public static void sysout(String otp) {
-		// System.out.println(otp);
+		System.out.println(otp);
 	}
 
 	@Override
@@ -848,7 +848,7 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 
 		String localKey = Bytes.toString(logId.getKey())
 				+ WALTableProperties.logAndKeySeparator + Bytes.toString(key.get())
-				+ Bytes.toString(WALTableProperties.dataFamily)
+				+ Bytes.toString(WALTableProperties.WAL_FAMILY)
 				+ Bytes.toString(WALTableProperties.writeLockColumn);
 		HashedBytes rowKey = new HashedBytes(Bytes.toBytes(localKey));
 		CountDownLatch rowLatch = new CountDownLatch(1);

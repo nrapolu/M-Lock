@@ -274,7 +274,7 @@ public class TestWALManagerDistTxn {
 			int contentionOrder = 0;
 			if (args.length >= 6)
 				numDataSplits = Integer.parseInt(args[5]);
-			if (args.length == 7)
+			if (args.length >= 7)
 				doMigrateLocks = (Integer.parseInt(args[6]) == 1) ? true : false;
 			if (args.length == 8)
 				contentionOrder = Integer.parseInt(args[7]);

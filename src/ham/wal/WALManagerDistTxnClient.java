@@ -55,7 +55,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 	}
 
 	public static void sysout(long trxId, String otp) {
-		// System.out.println(trxId + " : " + otp);
+		System.out.println(trxId + " : " + otp);
 	}
 
 	public DistTxnState beginTransaction() throws IOException {
@@ -733,7 +733,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 	}
 
 	public void putShadowObjects(final HTable logTable, final HTable dataTable,
-			final DistTxnState transactionState, boolean shouldMigrateLocks)
+			final DistTxnState transactionState, boolean shouldMigrateLocks, String preferredSalt)
 			throws InterruptedException, IOException {
 		long trxId = transactionState.getTransactionId();
 
@@ -746,9 +746,11 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		// that id
 		// as the key for the destination LogId where the keys should be placed.
 		if (shouldMigrateLocks) {
+			sysout(trxId, "Placing request for migration");
 			LockMigrator lockMigrator = new LockMigrator(logTable.getConfiguration(),
 					transactionState.getTransactionId());
 			lockMigrator.addLockSetToMigrate(lockSet);
+			lockMigrator.addPreferredSaltForLockTablePartition(preferredSalt);
 			Future future = pool.submit(lockMigrator);
 			futures.add(future);
 			startTimeForMigration = System.currentTimeMillis();
@@ -885,7 +887,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		if (stopForLockMigration) {
 			long timeForMigration = stopForLockMigration();
 			transactionState.setLockMigrationTime(timeForMigration);
-			System.out.println("Time for lock migration: " + timeForMigration);
+			// System.out.println("Time for lock migration: " + timeForMigration);
 		}
 		sysout(trxId, "In acquire locks via indirection.");
 		// Grab the entire writeBuffer and iterate on the keys in the order of
@@ -1128,7 +1130,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		if (stopForLockMigration) {
 			long timeForMigration = stopForLockMigration();
 			transactionState.setLockMigrationTime(timeForMigration);
-			System.out.println("Time for lock migration: " + timeForMigration);
+			// System.out.println("Time for lock migration: " + timeForMigration);
 		}
 		sysout(trxId, "In acquire locks via indirection.");
 		// Grab the entire writeBuffer and iterate on the keys in the order of
@@ -1908,9 +1910,23 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 				updates.add((Put) action.getAction());
 				LogId destLogId = LockMigrator.afterMigrationKeyMap
 						.get(new ImmutableBytesWritable(action.getAction().getRow()));
-				if (destLogId != null)
+				if (destLogId != null) {
+					// BIG NOTE: We are disabling "greedy eviction" for districtNextOrderId lock.
+					// We are doing this by making the update to lock in lock-table as ONLY_UNLOCK
+					// instead of ONLY_DELETE. This is what will ideally be done by the clustering
+					// process on the lock-table. The process won't evict this lock as it will 
+					// be used frequently. It could evict the other locks, which are mostly
+					// for stock table, and also are infrequently re-used. Now, this change here
+					// is TPCC specific. We can't be doing this change in WALManagerDistTxnClient
+					// as its a very generic class. We need to figure out another way of doing this.
+					// Ideally, it should be done by the clustering process on the lock-table.
+					if (Bytes.toString(logId.getKey()).
+							startsWith(TPCCTableProperties.districtWALPrefix)) {
+						sysout(trxId, "Found the district log Id: " + Bytes.toString(logId.getKey()));
+						destLogId.setCommitType(LogId.ONLY_UNLOCK);
+					}
 					destLogIds.add(destLogId);
-				else {
+				} else {
 					logId.setCommitType(LogId.ONLY_UNLOCK);
 					destLogIds.add(logId);
 				}

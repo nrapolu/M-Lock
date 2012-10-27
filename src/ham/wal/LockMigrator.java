@@ -6,6 +6,7 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
@@ -55,13 +56,14 @@ public class LockMigrator extends HasThread implements Runnable {
 	// WALTableProperties. Different tables of the benchmark are encoded in the same table
 	// either under difereent column families or as different keyspaces.
 	List<List<byte[]>> lockSetsToMigrate = new LinkedList<List<byte[]>>();
+	List<String> preferredSaltList = new LinkedList<String>();
 	static Map<ImmutableBytesWritable, LogId> afterMigrationKeyMap = 
 		new HashMap<ImmutableBytesWritable, LogId>();
 	ReentrantLock overallMigrationLock = new ReentrantLock();
 	HTable logTable = null;
 	
 	public static void sysout(String otp) {
-		//System.out.println(otp);
+		System.out.println(otp);
 	}
 	
 	public LockMigrator(Configuration conf, Long id) throws IOException {
@@ -122,10 +124,21 @@ public class LockMigrator extends HasThread implements Runnable {
 		// Flush the present migration map, if needed.
 		afterMigrationKeyMap.clear();
 		final LogId destLogId = new LogId();
-		// We salt the key at the end to decrease the possibility of hotspot.
+		// We salt the key at the end to decrease the possibility of hotspot. This is done by
+		// prefixing it with a random number between 0 and 100.
 		// We need salting in the first place to avoid collisions with existing keys (which are all only
 		// numeric).
-		destLogId.setKey(Bytes.toBytes(this.id + "-MigratedLock"));
+		// TODO: In the case of "intelligent" migration, the salt has to be decided by looking
+		// at the locks being migrated. For TPC-C, we have to base it on the home-warehouse, which
+		// is the warehouse of the maximum number of locks in the lockSet.
+		String salt = null;
+		if (!preferredSaltList.isEmpty()) {
+			salt = preferredSaltList.get(0);
+		} else {
+			Random rand = new Random();
+			salt = Integer.toString(rand.nextInt() % 100);
+		}
+		destLogId.setKey(Bytes.toBytes(salt + "-" + this.id + "-MigratedLock"));
 		destLogId.setName(WALTableProperties.walTableName);
 		
 		// TODO: Extend this to consider several lockSets at once.
@@ -194,8 +207,7 @@ public class LockMigrator extends HasThread implements Runnable {
 		LogId lastLogId = logIdToKeyMap.lastKey();
 		//System.out.println("Last logId: " + lastLogId.toString());
 		MigrateLocksCallBack migrateLocksCallBack = new MigrateLocksCallBack();
-		logTable.coprocessorExec(WALManagerDistTxnProtocol.class, firstLogId
-				.getKey(), lastLogId.getKey(),
+		logTable.coprocessorExec(WALManagerDistTxnProtocol.class, null, null,
 				new Batch.Call<WALManagerDistTxnProtocol, List<List<Boolean>>>() {
 					@Override
 					public List<List<Boolean>> call(WALManagerDistTxnProtocol instance)
@@ -216,8 +228,8 @@ public class LockMigrator extends HasThread implements Runnable {
 			assert(boolList.size() == keyList.size());
 			for (int j = 0; j < keyList.size(); j++) {
 				ImmutableBytesWritable key = keyList.get(j);
-				sysout ("For key: " + Bytes.toString(key.get()));
-				boolean isMigrated = boolList.get(j);
+				sysout ("For logId: " + origLogId.toString() + ", key: " + Bytes.toString(key.get()));
+				boolean isMigrated = boolList.get(j);	
 				if (isMigrated) {
 					destLogId.setCommitType(LogId.ONLY_DELETE);
 					afterMigrationKeyMap.put(key, destLogId);
@@ -235,6 +247,10 @@ public class LockMigrator extends HasThread implements Runnable {
 	
 	public void addLockSetToMigrate(List<byte[]> lockSet) {
 		lockSetsToMigrate.add(lockSet);
+	}
+	
+	public void addPreferredSaltForLockTablePartition(String salt) {
+		preferredSaltList.add(salt);
 	}
 	
 	public Map<ImmutableBytesWritable, LogId> getAfterMigrationKeyMap() {

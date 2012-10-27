@@ -332,7 +332,7 @@ public class TPCCPessimisticNewOrderTrxExecutor extends TPCCTableProperties
 			// We measure time and attempts for each.
 			long startPutShadowTime = System.currentTimeMillis();
 			walManagerDistTxnClient.putShadowObjects(logTable, dataTable,
-					transactionState, migrateLocks);
+					transactionState, migrateLocks, Bytes.toString(homeWarehouseId));
 			long endPutShadowTime = System.currentTimeMillis();
 
 			long startSecondPutTxnStateTime = System.currentTimeMillis();

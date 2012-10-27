@@ -236,8 +236,8 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 						dataFamily, stockQuantityColumn)));
 				stockCount++;
 
-				System.out.println("For itemKey: " + itemStockKey
-						+ "Final to-be-stock-count is: " + stockCount);
+				//System.out.println("For itemKey: " + itemStockKey
+				//		+ "Final to-be-stock-count is: " + stockCount);
 
 				// Create a Put with the new stock count.
 				Put p = new Put(Bytes.toBytes(itemStockKey));
@@ -295,8 +295,9 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 			// There can't be aborts while placing shadow objects or acquiring locks.
 			// We measure time and attempts for each.
 			long startPutShadowTime = System.currentTimeMillis();
+			//System.out.println("MigrateLocks request status: " + migrateLocks);
 			walManagerDistTxnClient.putShadowObjects(logTable, dataTable,
-					transactionState, migrateLocks);
+					transactionState, migrateLocks, Bytes.toString(homeWarehouseId));
 			long endPutShadowTime = System.currentTimeMillis();
 
 			long startPutTxnStateTime = System.currentTimeMillis();
@@ -318,8 +319,8 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 							logTable, dataTable, transactionState);
 			long endVersionCheckTime = System.currentTimeMillis();
 
-			System.out.println("CommitResponse after checkVersions: "
-					+ commitResponse);
+			//System.out.println("CommitResponse after checkVersions: "
+			//		+ commitResponse);
 			if (!commitResponse) {
 				// We abort here.
 				countOfAborts++;
@@ -332,8 +333,8 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 			commitResponse = commitResponse
 					&& walManagerDistTxnClient.commitWritesPerEntityGroupWithShadows(
 							logTable, transactionState);
-			System.out.println("CommitResponse after commitWritesPerEntityGroup: "
-					+ commitResponse);
+			//System.out.println("CommitResponse after commitWritesPerEntityGroup: "
+			//		+ commitResponse);
 			if (!commitResponse) {
 				// We abort here.
 				countOfAborts++;

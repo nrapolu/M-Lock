@@ -38,14 +38,14 @@ public class TPCCTableProperties extends WALTableProperties {
 	byte[] orderLineQuantityColumn = Bytes.toBytes("OL_QUANTITY");
 	byte[] orderLineAmountColumn = Bytes.toBytes("OL_AMOUNT");
 
-	String orderWALPrefix = "!";
-	String districtWALPrefix = "=";
+	static String orderWALPrefix = "!";
+	static String districtWALPrefix = "=";
 	
 	int constantTaxRate = 10;
 	int constantItemPrice = 10;
 	int constantDiscount = 10;
 
-	int numItemsPerWarehouse = 100;
+	int numItemsPerWarehouse = 100000;
 	
 	public TPCCTableProperties(Configuration conf, HBaseAdmin admin) {
 		super(conf, admin);
@@ -60,7 +60,7 @@ public class TPCCTableProperties extends WALTableProperties {
 	public void populateDataTableEntries(long numWarehouses, boolean writeBlob)
 			throws IOException, InterruptedException {
 		HTable hDataTable = new HTable(conf, dataTableName);
-		hDataTable.setWriteBufferSize(numWarehouses * 100);
+		hDataTable.setWriteBufferSize(numWarehouses * 1000 * 1000);
 		byte[] blob = new byte[BLOB_SIZE];
 		// Populate the WAREHOUSE table.
 		for (long i = 1; i <= numWarehouses; i++) {
@@ -190,7 +190,7 @@ public class TPCCTableProperties extends WALTableProperties {
 			throws IOException, InterruptedException {
 		HTable logTable = new HTable(conf, walTableName);
 		logTable.setAutoFlush(false);
-		logTable.setWriteBufferSize(numWarehouses * 100);
+		logTable.setWriteBufferSize(numWarehouses * 1000 * 1000);
 		
 		// Populate the WAREHOUSE table.
 		for (long i = 1; i <= numWarehouses; i++) {

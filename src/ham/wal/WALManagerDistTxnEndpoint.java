@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -23,6 +24,7 @@ import java.util.concurrent.TimeUnit;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.client.HTable;
@@ -37,7 +39,11 @@ import org.apache.hadoop.hbase.filter.CompareFilter;
 import org.apache.hadoop.hbase.filter.WritableByteArrayComparable;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.hadoop.hbase.regionserver.HRegion;
+import org.apache.hadoop.hbase.regionserver.wal.HLog;
+import org.apache.hadoop.hbase.regionserver.wal.WALEdit;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
+import org.apache.hadoop.hbase.util.HashedBytes;
 import org.apache.hadoop.hbase.util.Pair;
 
 public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
@@ -62,7 +68,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 	// new DaemonThreadFactory());
 
 	public static void sysout(String otp) {
-		// System.out.println(otp);
+		//System.out.println(otp);
 	}
 
 	@Override
@@ -305,22 +311,6 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 			Long transactionId, List<LogId> logs, List<ImmutableBytesWritable> keys,
 			List<Boolean> isKeyMigrated) throws IOException {
 		long zero = WALTableProperties.zero;
-		// Creating a HTablePool just in case we need to pull in a HTable to acquire
-		// the lock for
-		// the key, if the key does not fall in the region's key-range.
-		HTablePool tablePool = new HTablePool(super.conf, Integer.MAX_VALUE,
-				new HTableFactory() {
-					public HTableInterface createHTableInterface(Configuration config,
-							byte[] tableName) {
-						try {
-							HTable table = new HTable(config, tableName);
-							table.setAutoFlush(false);
-							return table;
-						} catch (IOException ioe) {
-							throw new RuntimeException(ioe);
-						}
-					}
-				});
 
 		// Get the coprocessor environment
 		RegionCoprocessorEnvironment env = (RegionCoprocessorEnvironment) getEnvironment();
@@ -336,139 +326,267 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 			byte[] indirectionKey = Bytes.toBytes(Bytes.toString(logId.getKey())
 					+ WALTableProperties.logAndKeySeparator
 					+ Bytes.toString(origKey.get()));
-			sysout("Acquiring lock for key: " + Bytes.toString(indirectionKey));
-			boolean isLockPlaced = false;
-			if (HRegion.rowIsInRange(region.getRegionInfo(), indirectionKey)) {
-				Put p = new Put(indirectionKey);
-				p.add(WALTableProperties.WAL_FAMILY, writeLockColumn, appTimestamp,
-						Bytes.toBytes(transactionId));
-				p.add(WALTableProperties.WAL_FAMILY,
-						WALTableProperties.isLockPlacedOrMigratedColumn, appTimestamp,
-						Bytes.toBytes(WALTableProperties.one));
-				isLockPlaced = region.checkAndMutate(indirectionKey,
-						WALTableProperties.WAL_FAMILY, writeLockColumn,
-						CompareFilter.CompareOp.EQUAL, new BinaryComparator(Bytes
-								.toBytes(zero)), p, null, true);
 
-				// A lock can't be placed due to either of three cases (The flag
-				// indicates the case number):
-				// 1. Someone else placed a lock at the source -- in which case, the
-				// "transactionId"
-				// would be found as value, and
-				// "isLockMigrated" column would have a "0".
-				// 2. Someone else migrated the lock -- in which case, the
-				// "transactionId" would be found
-				// as value, "isLockMigrated" column would have a "1" and
-				// "destinationKey" column would
-				// contain the destinationKey at which the lock would be found.
-				// The return value would depend on the encountered case.
-				// If we found a migration, inform the client about it by placing the
-				// "destinationKey"
-				// as the 4rd value in the returned list.
-				// 3. Someone deleted the lock -- implying that this was a detour and
-				// the
-				// client has to go back to the original position to place a lock.
-				if (!isLockPlaced) {
-					sysout("Could not obtain lock for key: "
-							+ Bytes.toString(indirectionKey));
-					Get g = new Get(indirectionKey);
-					g.addColumn(WALTableProperties.WAL_FAMILY, writeLockColumn);
-					g.addColumn(WALTableProperties.WAL_FAMILY,
-							WALTableProperties.isLockMigratedColumn);
-					g.addColumn(WALTableProperties.WAL_FAMILY,
-							WALTableProperties.destinationKeyColumn);
-					Result r = region.get(g, null);
-					if (!r.isEmpty()) {
-						// first guess is lock has been placed by someone else.
-						sysout("Result r is NOT empty");
-						flag = 1;
-						otherTrxId = Bytes.toLong(r.getValue(WALTableProperties.WAL_FAMILY,
-								writeLockColumn));
-						long isLockMigrated = Bytes.toLong(r.getValue(
-								WALTableProperties.WAL_FAMILY,
-								WALTableProperties.isLockMigratedColumn));
-						// If the value of "isLockMigrated" is 2, that means the key you are
-						// locking is the
-						// destination key. In that case, we don't send the destinationKey
-						// to the client.
-						// The client has to retry on this key again to acquire the lock.
-						if (isLockMigrated == 1) {
-							flag = 2;
-							destinationKey = r.getValue(WALTableProperties.WAL_FAMILY,
-									WALTableProperties.destinationKeyColumn);
+			// This rest of the code in this function should eventually be moved to
+			// WALManagerEndpointForMyKVSpace as it is specific to WAL commits. This
+			// functionality is
+			// similar to checkAndMutate but for multiple objects (locks) in a single
+			// WAL. At present,
+			// the code for only reads and only writes is present in
+			// WALManagerEndpointForMyKVSpace.
+			// Adding this will give atomic read-modify-write operations on the WAL.
+
+			// We first acquire the WAL lock, after that we can do whatever we want
+			// with the lock objects.
+			HashedBytes rowKey = new HashedBytes(logId.getKey());
+			CountDownLatch rowLatch = new CountDownLatch(1);
+			final int DEFAULT_ROWLOCK_WAIT_DURATION = 30000;
+
+			// loop until we acquire the row lock (unless !waitForLock)
+			boolean walLockAcquired = false;
+			while (true) {
+				CountDownLatch existingLatch = lockedRows.putIfAbsent(rowKey, rowLatch);
+				if (existingLatch == null) {
+					break;
+				} else {
+					// row already locked
+					try {
+						if (!existingLatch.await(DEFAULT_ROWLOCK_WAIT_DURATION,
+								TimeUnit.MILLISECONDS)) {
+							walLockAcquired = true;
+							break;
 						}
-					} else {
-						sysout("Checking for migration options. If its not migrated, we'll create the lock");
-						// Here there are two options:
-						// 1. We are at the lock's original place but couldn't find a lock
-						// entry
-						// as no one used it yet. If so, we shall create and place the lock.
-						// This
-						// option is valid if "isMigrated" is false.
-						// 2. We are at the lock's destination place but couldn't find a
-						// lock entry,
-						// implying that the entry was deleted by the migrator. In this
-						// case,
-						// we just return with flag=3, to retry at the source.
-						if (isMigrated) {
-							// This shows that the detour lock was deleted.
-							flag = 3;
-						} else {
-							sysout("Creating a new lock and pre-locking it.");
-							Put createLock = new Put(indirectionKey);
-							createLock.add(WALTableProperties.WAL_FAMILY, writeLockColumn,
-									appTimestamp, Bytes.toBytes(transactionId));
-							createLock.add(WALTableProperties.WAL_FAMILY,
-									WALTableProperties.isLockPlacedOrMigratedColumn,
-									appTimestamp, Bytes.toBytes(WALTableProperties.one));
-							createLock.add(WALTableProperties.WAL_FAMILY, versionColumn,
-									appTimestamp, Bytes.toBytes(Long.toString(zero)));
-							createLock.add(WALTableProperties.WAL_FAMILY,
-									WALTableProperties.isLockMigratedColumn,
-									WALTableProperties.appTimestamp, Bytes
-											.toBytes(WALTableProperties.zero));
-
-							if (HRegion.rowIsInRange(region.getRegionInfo(), indirectionKey)) {
-								region.put(createLock);
-							} else {
-								HTable table = (HTable) tablePool
-										.getTable(WALTableProperties.walTableName);
-								table.put(createLock);
-								table.flushCommits();
-							}
-
-							isLockPlaced = true;
-						}
+					} catch (InterruptedException ie) {
+						// Empty
 					}
-					sysout("OtherTrxId holding the lock is: " + otherTrxId);
 				}
 			}
-			/*
-			 * else {sysout(
-			 * "Not in region, hence sending a request to lock through HTable, for key: "
-			 * + Bytes.toString(indirectionKey)); HTable table = (HTable) tablePool
-			 * .getTable(WALTableProperties.walTableName); isLockPlaced =
-			 * table.checkAndPut(indirectionKey, WALTableProperties.WAL_FAMILY,
-			 * writeLockColumn, Bytes.toBytes(zero), new Put(indirectionKey).add(
-			 * WALTableProperties.WAL_FAMILY, writeLockColumn, appTimestamp, Bytes
-			 * .toBytes(transactionId)));
-			 * 
-			 * if (!isLockPlaced) { Get g = new Get(indirectionKey);
-			 * g.addColumn(WALTableProperties.WAL_FAMILY, writeLockColumn); Result r =
-			 * table.get(g); otherTrxId =
-			 * Bytes.toLong(r.getValue(WALTableProperties.WAL_FAMILY,
-			 * writeLockColumn)); sysout("Could not obtain lock for key: " +
-			 * Bytes.toString(indirectionKey));
-			 * sysout("OtherTrxId holding the lock is: " + otherTrxId); } }
-			 */
 
-			if (isLockPlaced)
-				count++;
-			else {
-				tablePool.close();
-				break;
+			try {
+				// A lock acquired above is similar to the row lock for the row
+				// containing
+				// all WAL related info. So, we can now fetch the CURRENT_TS, SYNC_TS,
+				// and
+				// OLDEST_TS from the row, without caring for someone else changing them
+				// after
+				// we've read them, as no one else can modify the row's content.
+				boolean nextLockIsUnderTheSameWAL = false;
+				WALEdit walEdit = new WALEdit();
+				long now = EnvironmentEdgeManager.currentTimeMillis();
+				HLog log = region.getLog();
+				HTableDescriptor htd = new HTableDescriptor(
+						WALTableProperties.dataTableName);
+				boolean isLockPlaced = false;
+				
+				do {
+					sysout("Acquiring lock for key: " + Bytes.toString(indirectionKey));
+					isLockPlaced = false;
+					Put toBePersistedPut = null;
+					if (HRegion.rowIsInRange(region.getRegionInfo(), indirectionKey)) {
+						Put p = new Put(indirectionKey);
+						p.setWriteToWAL(false);
+						p.add(WALTableProperties.WAL_FAMILY, writeLockColumn, appTimestamp,
+								Bytes.toBytes(transactionId));
+						p.add(WALTableProperties.WAL_FAMILY,
+								WALTableProperties.isLockPlacedOrMigratedColumn, appTimestamp,
+								Bytes.toBytes(WALTableProperties.one));
+						toBePersistedPut = p;
+						
+						isLockPlaced = region.checkAndMutate(indirectionKey,
+								WALTableProperties.WAL_FAMILY, writeLockColumn,
+								CompareFilter.CompareOp.EQUAL, new BinaryComparator(Bytes
+										.toBytes(zero)), p, null, true);
+
+						// A lock can't be placed due to either of three cases (The flag
+						// indicates the case number):
+						// 1. Someone else placed a lock at the source -- in which case, the
+						// "transactionId"
+						// would be found as value, and
+						// "isLockMigrated" column would have a "0".
+						// 2. Someone else migrated the lock -- in which case, the
+						// "transactionId" would be found
+						// as value, "isLockMigrated" column would have a "1" and
+						// "destinationKey" column would
+						// contain the destinationKey at which the lock would be found.
+						// The return value would depend on the encountered case.
+						// If we found a migration, inform the client about it by placing
+						// the
+						// "destinationKey"
+						// as the 4rd value in the returned list.
+						// 3. Someone deleted the lock -- implying that this was a detour
+						// and
+						// the
+						// client has to go back to the original position to place a lock.
+						if (!isLockPlaced) {
+							sysout("Could not obtain lock for key: "
+									+ Bytes.toString(indirectionKey));
+							Get g = new Get(indirectionKey);
+							g.addColumn(WALTableProperties.WAL_FAMILY, writeLockColumn);
+							g.addColumn(WALTableProperties.WAL_FAMILY,
+									WALTableProperties.isLockMigratedColumn);
+							g.addColumn(WALTableProperties.WAL_FAMILY,
+									WALTableProperties.destinationKeyColumn);
+							Result r = region.get(g, null);
+							if (!r.isEmpty()) {
+								// first guess is lock has been placed by someone else.
+								sysout("Result r is NOT empty");
+								flag = 1;
+								otherTrxId = Bytes.toLong(r.getValue(
+										WALTableProperties.WAL_FAMILY, writeLockColumn));
+								long isLockMigrated = Bytes.toLong(r.getValue(
+										WALTableProperties.WAL_FAMILY,
+										WALTableProperties.isLockMigratedColumn));
+								// If the value of "isLockMigrated" is 2, that means the key you
+								// are
+								// locking is the
+								// destination key. In that case, we don't send the
+								// destinationKey
+								// to the client.
+								// The client has to retry on this key again to acquire the
+								// lock.
+								if (isLockMigrated == 1) {
+									flag = 2;
+									destinationKey = r.getValue(WALTableProperties.WAL_FAMILY,
+											WALTableProperties.destinationKeyColumn);
+								}
+							} else {
+								sysout("Checking for migration options. If its not migrated, we'll create the lock");
+								// Here there are two options:
+								// 1. We are at the lock's original place but couldn't find a
+								// lock
+								// entry
+								// as no one used it yet. If so, we shall create and place the
+								// lock.
+								// This
+								// option is valid if "isMigrated" is false.
+								// 2. We are at the lock's destination place but couldn't find a
+								// lock entry,
+								// implying that the entry was deleted by the migrator. In this
+								// case,
+								// we just return with flag=3, to retry at the source.
+								if (isMigrated) {
+									// This shows that the detour lock was deleted.
+									flag = 3;
+								} else {
+									sysout("Creating a new lock and pre-locking it.");
+									Put createLock = new Put(indirectionKey);
+									createLock.setWriteToWAL(false);
+									createLock.add(WALTableProperties.WAL_FAMILY,
+											writeLockColumn, appTimestamp, Bytes
+													.toBytes(transactionId));
+									createLock.add(WALTableProperties.WAL_FAMILY,
+											WALTableProperties.isLockPlacedOrMigratedColumn,
+											appTimestamp, Bytes.toBytes(WALTableProperties.one));
+									createLock.add(WALTableProperties.WAL_FAMILY, versionColumn,
+											appTimestamp, Bytes.toBytes(Long.toString(zero)));
+									createLock.add(WALTableProperties.WAL_FAMILY,
+											WALTableProperties.isLockMigratedColumn,
+											WALTableProperties.appTimestamp, Bytes
+													.toBytes(WALTableProperties.zero));
+									toBePersistedPut = createLock;
+									
+									region.put(createLock);
+
+									isLockPlaced = true;
+								}
+							}
+							sysout("OtherTrxId holding the lock is: " + otherTrxId);
+						}
+					}
+					/*
+					 * else {sysout(
+					 * "Not in region, hence sending a request to lock through HTable, for key: "
+					 * + Bytes.toString(indirectionKey)); HTable table = (HTable)
+					 * tablePool .getTable(WALTableProperties.walTableName); isLockPlaced
+					 * = table.checkAndPut(indirectionKey, WALTableProperties.WAL_FAMILY,
+					 * writeLockColumn, Bytes.toBytes(zero), new Put(indirectionKey).add(
+					 * WALTableProperties.WAL_FAMILY, writeLockColumn, appTimestamp, Bytes
+					 * .toBytes(transactionId)));
+					 * 
+					 * if (!isLockPlaced) { Get g = new Get(indirectionKey);
+					 * g.addColumn(WALTableProperties.WAL_FAMILY, writeLockColumn); Result
+					 * r = table.get(g); otherTrxId =
+					 * Bytes.toLong(r.getValue(WALTableProperties.WAL_FAMILY,
+					 * writeLockColumn)); sysout("Could not obtain lock for key: " +
+					 * Bytes.toString(indirectionKey));
+					 * sysout("OtherTrxId holding the lock is: " + otherTrxId); } }
+					 */
+
+					// Find out if the next lock is under the same WAL.
+					// If so, change the value of "keyBeingOperatedOn" to the next WAL.
+					// If not, then persist the KeyValue objects collected for all Lock
+					// Writes in this iteration
+					// and increment the outer loop variable.
+					// BIGNOTE: In our implementation, unlocking is happening directly on
+					// individual lock objects.
+					// It is not going through the WAL lock.
+					// In this case persistance information in region-WAL could become
+					// out-of-order, and so in
+					// case of region failure, recovery might be slightly messed-up (very
+					// low chance but might happen).
+					// Note that the in-memory structures will not get corrupted at all.
+					// The checkAndMutate being
+					// used for locks and simple Put operation for Unlock are both using
+					// same row-locks for
+					// synchronization.
+					// CHANGES NEEDED: Somehow, we need to figure out why one coprocessor
+					// is not able to call
+					// a function on another coprocessor. Once we do that, unlock requests
+					// will also go through
+					// the WAL and hence will acquire the WAL lock before proceeding.
+					if (isLockPlaced) {
+						count++;
+						
+						// Add persistence info to WALEdit for the present lock.
+						Map<byte[], List<KeyValue>> familyMap = toBePersistedPut.getFamilyMap();
+						for (List<KeyValue> kvs: familyMap.values()) {
+							for (KeyValue kv: kvs) {
+								walEdit.add(kv);
+							}
+						}
+						
+						// Read the next lock and see if it belongs to the same WAL.
+						LogId nextLogId = null;
+						if (i+1 < keys.size()) 
+							nextLogId = logs.get(i+1);
+						
+						if (nextLogId != null && nextLogId.equals(logId)) {
+							nextLockIsUnderTheSameWAL = true;
+							logId = nextLogId;
+							
+							isMigrated = isKeyMigrated.get(i+1);
+							origKey = keys.get(i+1);
+							sysout("Processed lock: " + Bytes.toString(indirectionKey));
+							indirectionKey = Bytes.toBytes(Bytes.toString(logId.getKey())
+									+ WALTableProperties.logAndKeySeparator
+									+ Bytes.toString(origKey.get()));
+							sysout("About to process lock: " + Bytes.toString(indirectionKey));
+							
+							// Increase the top-level loop index forever.
+							i++;
+						} else {
+							nextLockIsUnderTheSameWAL = false;
+							// Persist the WALEdit information.
+							log.append(region.getRegionInfo(),
+									WALTableProperties.dataTableName, walEdit, now, htd);
+						}
+					}
+				} while (isLockPlaced && nextLockIsUnderTheSameWAL);
+			} catch (Exception e) {
+				System.err.println("Error in commit function: " + e.getMessage());
+				e.printStackTrace();
+			} finally {
+				// Give up the lock on the wal.
+				// Latches are one-time gates. So we have to open the gate to release
+				// the
+				// waiting
+				// prisoners and then purge the gate completely.
+				// New guy wanting the lock will install another gate.
+				CountDownLatch internalRowLatch = lockedRows.remove(rowKey);
+				internalRowLatch.countDown();
 			}
 		}
+
 		List<ImmutableBytesWritable> returnVals = new ArrayList<ImmutableBytesWritable>();
 		returnVals.add(new ImmutableBytesWritable(Bytes.toBytes(flag)));
 		returnVals.add(new ImmutableBytesWritable(Bytes.toBytes(count)));
@@ -767,6 +885,8 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 			final LogId logId = logs.get(logIndex);
 			// If the logId does not belong to this region, we just skip.
 			if (!HRegion.rowIsInRange(region.getRegionInfo(), logId.getKey())) {
+				sysout("ROW NOT IN REGION: logId: " + Bytes.toString(logId.getKey()) + ", region info: " +
+						region.getRegionInfo().toString());
 				returnValList.set(logIndex, new LinkedList<Boolean>());
 				continue;
 			}
@@ -822,6 +942,11 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 			}
 		}
 
+		for (int k = 0; k < logs.size(); k++) {
+			LogId log = logs.get(k);
+			List<Boolean> boolList = returnValList.get(k);
+			sysout("Verification: for log: " + log.toString() + ", boolList size: " + boolList.size());
+		}
 		return returnValList;
 	}
 
@@ -1044,14 +1169,10 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 		}
 		HTable dataTable = new HTable(super.conf, WALTableProperties.dataTableName);
 		/*
-		try {
-			if (!toBeFetchedFromDataStore.isEmpty()) {
-				//Object[] results = dataTable.batch(toBeFetchedFromDataStore);
-			}
-		} catch (InterruptedException e1) {
-			// fall through.
-		}
-		*/
+		 * try { if (!toBeFetchedFromDataStore.isEmpty()) { //Object[] results =
+		 * dataTable.batch(toBeFetchedFromDataStore); } } catch
+		 * (InterruptedException e1) { // fall through. }
+		 */
 		// TODO: From a map of the above results. For now, we don't really
 		// use this data as this function is taking in the actual updates (Puts).
 		// If another transaction is doing a roll-forward, we won't have those Puts.
@@ -1194,23 +1315,21 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 				 * finalWrites.add(versionWriteToOrigKey);
 				 */
 
-				// Since locking is being taken care of separately on a different columnFamily (WAL_FAMILY),
+				// Since locking is being taken care of separately on a different
+				// columnFamily (WAL_FAMILY),
 				// we don't need any writes specific to locks on data.
 				/*
-				Write lockWriteToOrigKey = new Write();
-				byte[] lockName = Bytes.toBytes(Bytes
-						.toString(WALTableProperties.dataTableName)
-						+ Write.nameDelimiter
-						+ Bytes.toString(WALTableProperties.dataFamily)
-						+ Write.nameDelimiter
-						+ Bytes.toString(WALTableProperties.writeLockColumn));
-				lockWriteToOrigKey.setName(lockName);
-				lockWriteToOrigKey.setKey(put.getRow());
-				lockWriteToOrigKey.setValue(Bytes.toBytes(WALTableProperties.zero));
-				sysout("Commit per entity group: Write for unlocking the key: "
-						+ lockWriteToOrigKey.toString());
-				finalWrites.add(lockWriteToOrigKey);
-				*/
+				 * Write lockWriteToOrigKey = new Write(); byte[] lockName =
+				 * Bytes.toBytes(Bytes .toString(WALTableProperties.dataTableName) +
+				 * Write.nameDelimiter + Bytes.toString(WALTableProperties.dataFamily) +
+				 * Write.nameDelimiter +
+				 * Bytes.toString(WALTableProperties.writeLockColumn));
+				 * lockWriteToOrigKey.setName(lockName);
+				 * lockWriteToOrigKey.setKey(put.getRow());
+				 * lockWriteToOrigKey.setValue(Bytes.toBytes(WALTableProperties.zero));
+				 * sysout("Commit per entity group: Write for unlocking the key: " +
+				 * lockWriteToOrigKey.toString()); finalWrites.add(lockWriteToOrigKey);
+				 */
 
 				// For every KeyValue, we create a write and add it to finalWrites.
 				// Typically, we expect only one KeyValue with the value information.
