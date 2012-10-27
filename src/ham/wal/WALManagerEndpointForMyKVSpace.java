@@ -83,7 +83,7 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 	private boolean stopped = false;
 
 	public static void sysout(String otp) {
-		System.out.println(otp);
+		//System.out.println(otp);
 	}
 
 	@Override
@@ -906,7 +906,7 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 		// TODO: Make this a global variable. Aren't we using a HTable in
 		// StoreUpdater?
 		HTable logTable = new HTable(this.conf, WALTableProperties.walTableName);
-		
+
 		if (canAttemptMigration) {
 			// HRegionLocation location =
 			// logTable.getRegionLocation(destLogId.getKey(),
@@ -927,7 +927,8 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 			logTable.put(p);
 			logTable.flushCommits();
 
-			sysout("Finished adding a lock at the remote logId");
+			sysout("Finished adding a lock at the remote logId for tableCachedLock: "
+					+ Bytes.toString(tableCachedLock));
 		}
 
 		/*
@@ -1002,8 +1003,8 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 								.toBytes(WALTableProperties.one));
 				p.add(WALTableProperties.WAL_FAMILY,
 						WALTableProperties.isLockPlacedOrMigratedColumn,
-						WALTableProperties.appTimestamp, Bytes
-								.toBytes(WALTableProperties.one));
+						WALTableProperties.appTimestamp,
+					  Bytes.toBytes(WALTableProperties.one));
 				p.add(WALTableProperties.WAL_FAMILY,
 						WALTableProperties.destinationKeyColumn,
 						WALTableProperties.appTimestamp, selfPlacedDestinationKey);
@@ -1013,11 +1014,17 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 							WALTableProperties.isLockPlacedOrMigratedColumn,
 							CompareFilter.CompareOp.EQUAL, new BinaryComparator(Bytes
 									.toBytes(WALTableProperties.zero)), p, null, true);
+					sysout("For tableCachedLock: "
+							+ Bytes.toString(tableCachedLock)
+							+ ", CheckAndMutate succeeded and so we placed the migration info ");
 				} else {
 					migrationResult = logTable.checkAndPut(tableCachedLock,
 							WALTableProperties.WAL_FAMILY,
 							WALTableProperties.isLockPlacedOrMigratedColumn, Bytes
 									.toBytes(WALTableProperties.zero), p);
+					sysout("For tableCachedLock: "
+							+ Bytes.toString(tableCachedLock)
+							+ ", CheckAndPut succeeded through logTable and so we placed the migration info.");
 				}
 
 				if (migrationResult == false) {
@@ -1037,16 +1044,17 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 						// place.
 						// Thus create it and mark it as migrated.
 						if (r.isEmpty()) {
+							sysout("NO TABLE_CACHED_LOCK found; we are inserting it ourself!");
 							region.put(p);
 							migrationResult = true;
 						}
 					}
+				}
 
-					if (migrationResult == true) {
-						sysout("PLACED A DETOUR AT CACHED LOCK: "
-								+ Bytes.toString(tableCachedLock));
-						return new ImmutableBytesWritable(selfPlacedDestinationKey);
-					}
+				if (migrationResult == true) {
+					sysout("PLACED A DETOUR AT CACHED LOCK: "
+							+ Bytes.toString(tableCachedLock));
+					return new ImmutableBytesWritable(selfPlacedDestinationKey);
 				}
 			} finally {
 				// Remove the lock on the localKey.

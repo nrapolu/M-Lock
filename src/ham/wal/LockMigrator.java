@@ -63,7 +63,7 @@ public class LockMigrator extends HasThread implements Runnable {
 	HTable logTable = null;
 	
 	public static void sysout(String otp) {
-		System.out.println(otp);
+		//System.out.println(otp);
 	}
 	
 	public LockMigrator(Configuration conf, Long id) throws IOException {

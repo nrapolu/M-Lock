@@ -40,7 +40,7 @@ public class WALTableProperties {
 	final static byte[] isLockPlacedOrMigratedColumn = Bytes.toBytes("IS_LOCK_PLACED_OR_MIGRATED");
 	final static byte[] destinationKeyColumn = Bytes.toBytes("DESTINATION_KEY");
 	byte[] logFamily = WALTableProperties.WAL_FAMILY;
-	static long appTimestamp = 1;
+	static long appTimestamp = Long.MAX_VALUE;
 
 	static long zero = 0;
 	static long one = 1;
