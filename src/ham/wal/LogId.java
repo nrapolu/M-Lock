@@ -18,6 +18,17 @@ public class LogId implements Writable {
 	final static int ONLY_UNLOCK = 2;
 	final static int UNLOCK_AND_RESET_MIGRATION = 3;
 	
+	public LogId(LogId otherLogId) {
+		this.commitType = otherLogId.commitType;
+		this.name = otherLogId.name;
+		this.key = otherLogId.key;
+	}
+	
+	public LogId() {
+		super();
+		// TODO Auto-generated constructor stub
+	}
+
 	public byte[] getName() {
 		return name;
 	}

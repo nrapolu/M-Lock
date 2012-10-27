@@ -68,7 +68,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 	// new DaemonThreadFactory());
 
 	public static void sysout(String otp) {
-		//System.out.println(otp);
+		// System.out.println(otp);
 	}
 
 	@Override
@@ -377,7 +377,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 				HTableDescriptor htd = new HTableDescriptor(
 						WALTableProperties.dataTableName);
 				boolean isLockPlaced = false;
-				
+
 				do {
 					sysout("Acquiring lock for key: " + Bytes.toString(indirectionKey));
 					isLockPlaced = false;
@@ -391,7 +391,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 								WALTableProperties.isLockPlacedOrMigratedColumn, appTimestamp,
 								Bytes.toBytes(WALTableProperties.one));
 						toBePersistedPut = p;
-						
+
 						isLockPlaced = region.checkAndMutate(indirectionKey,
 								WALTableProperties.WAL_FAMILY, writeLockColumn,
 								CompareFilter.CompareOp.EQUAL, new BinaryComparator(Bytes
@@ -484,7 +484,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 											WALTableProperties.appTimestamp, Bytes
 													.toBytes(WALTableProperties.zero));
 									toBePersistedPut = createLock;
-									
+
 									region.put(createLock);
 
 									isLockPlaced = true;
@@ -536,32 +536,33 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 					// the WAL and hence will acquire the WAL lock before proceeding.
 					if (isLockPlaced) {
 						count++;
-						
+
 						// Add persistence info to WALEdit for the present lock.
-						Map<byte[], List<KeyValue>> familyMap = toBePersistedPut.getFamilyMap();
-						for (List<KeyValue> kvs: familyMap.values()) {
-							for (KeyValue kv: kvs) {
+						Map<byte[], List<KeyValue>> familyMap = toBePersistedPut
+								.getFamilyMap();
+						for (List<KeyValue> kvs : familyMap.values()) {
+							for (KeyValue kv : kvs) {
 								walEdit.add(kv);
 							}
 						}
-						
+
 						// Read the next lock and see if it belongs to the same WAL.
 						LogId nextLogId = null;
-						if (i+1 < keys.size()) 
-							nextLogId = logs.get(i+1);
-						
+						if (i + 1 < keys.size())
+							nextLogId = logs.get(i + 1);
+
 						if (nextLogId != null && nextLogId.equals(logId)) {
 							nextLockIsUnderTheSameWAL = true;
 							logId = nextLogId;
-							
-							isMigrated = isKeyMigrated.get(i+1);
-							origKey = keys.get(i+1);
+
+							isMigrated = isKeyMigrated.get(i + 1);
+							origKey = keys.get(i + 1);
 							sysout("Processed lock: " + Bytes.toString(indirectionKey));
 							indirectionKey = Bytes.toBytes(Bytes.toString(logId.getKey())
 									+ WALTableProperties.logAndKeySeparator
 									+ Bytes.toString(origKey.get()));
 							sysout("About to process lock: " + Bytes.toString(indirectionKey));
-							
+
 							// Increase the top-level loop index forever.
 							i++;
 						} else {
@@ -858,10 +859,11 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 	// I'm assuming the destination keys are the same as the original keys, only
 	// the logId will
 	// change.
-	public List<List<Boolean>> migrateLocks(final Long transactionId,
-			final List<LogId> logs, final List<List<ImmutableBytesWritable>> keys,
-			final LogId destLogId) throws IOException {
-		List<List<Boolean>> returnValList = new ArrayList<List<Boolean>>();
+	public List<List<ImmutableBytesWritable>> migrateLocks(
+			final Long transactionId, final List<LogId> logs,
+			final List<List<ImmutableBytesWritable>> keys, final LogId destLogId)
+			throws IOException {
+		List<List<ImmutableBytesWritable>> returnValList = new ArrayList<List<ImmutableBytesWritable>>();
 		for (int i = 0; i < logs.size(); i++) {
 			returnValList.add(null);
 		}
@@ -879,15 +881,15 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 		int ourKeyId = 0;
 		Map<Integer, String> localKeyIdToGlobalKeyIdMap = new HashMap<Integer, String>();
 
-		List<Future<Boolean>> futures = new ArrayList<Future<Boolean>>();
+		List<Future<ImmutableBytesWritable>> futures = new ArrayList<Future<ImmutableBytesWritable>>();
 		final WALManagerDistTxnEndpoint walManagerDistTxnEndpoint = this;
 		for (int logIndex = 0; logIndex < logs.size(); logIndex++) {
 			final LogId logId = logs.get(logIndex);
 			// If the logId does not belong to this region, we just skip.
 			if (!HRegion.rowIsInRange(region.getRegionInfo(), logId.getKey())) {
-				sysout("ROW NOT IN REGION: logId: " + Bytes.toString(logId.getKey()) + ", region info: " +
-						region.getRegionInfo().toString());
-				returnValList.set(logIndex, new LinkedList<Boolean>());
+				sysout("ROW NOT IN REGION: logId: " + Bytes.toString(logId.getKey())
+						+ ", region info: " + region.getRegionInfo().toString());
+				returnValList.set(logIndex, new LinkedList<ImmutableBytesWritable>());
 				continue;
 			}
 
@@ -897,8 +899,8 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 				localKeyIdToGlobalKeyIdMap.put(ourKeyId, Integer.toString(logIndex)
 						+ "=" + Integer.toString(keyIndex));
 				final ImmutableBytesWritable key = correspKeys.get(keyIndex);
-				Future<Boolean> future = pool.submit(new Callable<Boolean>() {
-					public Boolean call() throws Exception {
+				Future<ImmutableBytesWritable> future = pool.submit(new Callable<ImmutableBytesWritable>() {
+					public ImmutableBytesWritable call() throws Exception {
 						// Note that the destination key is th same as the original key,
 						// only the
 						// LogId changes.
@@ -916,14 +918,14 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 		// Go through the futures and grab the results.
 		for (int i = 0; i < futures.size(); i++) {
 			// All futures will have a value -- none will have a null.
-			Future<Boolean> future = futures.get(i);
+			Future<ImmutableBytesWritable> future = futures.get(i);
 			String globalKeyId = localKeyIdToGlobalKeyIdMap.get(i);
 			String[] tokens = globalKeyId.split("=");
 			int logIndex = Integer.parseInt(tokens[0]);
 			int keyIndex = Integer.parseInt(tokens[1]);
-			List<Boolean> boolList = returnValList.get(logIndex);
+			List<ImmutableBytesWritable> boolList = returnValList.get(logIndex);
 			if (boolList == null) {
-				boolList = new ArrayList<Boolean>();
+				boolList = new ArrayList<ImmutableBytesWritable>();
 				returnValList.set(logIndex, boolList);
 			}
 			// KeyIndex will usually be the size of the boolList at any time because
@@ -931,7 +933,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 			// keys were inserted sequentially into the futures list.
 			assert (keyIndex == boolList.size());
 			try {
-				Boolean result = future.get();
+				ImmutableBytesWritable result = future.get();
 				boolList.add(result);
 			} catch (InterruptedException e) {
 				// TODO Auto-generated catch block
@@ -944,8 +946,9 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 
 		for (int k = 0; k < logs.size(); k++) {
 			LogId log = logs.get(k);
-			List<Boolean> boolList = returnValList.get(k);
-			sysout("Verification: for log: " + log.toString() + ", boolList size: " + boolList.size());
+			List<ImmutableBytesWritable> boolList = returnValList.get(k);
+			sysout("Verification: for log: " + log.toString() + ", boolList size: "
+					+ boolList.size());
 		}
 		return returnValList;
 	}

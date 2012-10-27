@@ -493,10 +493,10 @@ public class WALManagerEndpoint extends BaseEndpointCoprocessor implements
 	}
 
 	@Override
-	public boolean migrateLock(Long transactionId, LogId logId,
+	public ImmutableBytesWritable migrateLock(Long transactionId, LogId logId,
 			ImmutableBytesWritable key, LogId destLogId,
 			ImmutableBytesWritable destKey) throws IOException {
 		// TODO Auto-generated method stub
-		return false;
+		return new ImmutableBytesWritable();
 	}
 }

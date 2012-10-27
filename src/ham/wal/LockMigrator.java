@@ -171,29 +171,29 @@ public class LockMigrator extends HasThread implements Runnable {
 		}
 
 		// Call migrateLocks endpoint function using a callback.
-		class MigrateLocksCallBack implements Batch.Callback<List<List<Boolean>>> {
-			private List<List<Boolean>> results = null;
+		class MigrateLocksCallBack implements Batch.Callback<List<List<ImmutableBytesWritable>>> {
+			private List<List<ImmutableBytesWritable>> results = null;
 
-			List<List<Boolean>> getResults() {
+			List<List<ImmutableBytesWritable>> getResults() {
 				return results;
 			}
 
 			@Override
 			public synchronized void update(byte[] region, byte[] row,
-					List<List<Boolean>> argResults) {
+					List<List<ImmutableBytesWritable>> argResults) {
 				// This call goes to multiple regions. Each returns the list of same
 				// size (equal to the size of logIdList argument. However, only some of
 				// the list elements will have values (others would be empty lists).
 				// We collect the non-empty elements and place them in this class's
 				// "results" list at the same position.
 				if (this.results == null) {
-					this.results = new ArrayList<List<Boolean>>(argResults.size());
+					this.results = new ArrayList<List<ImmutableBytesWritable>>(argResults.size());
 					for(int i = 0; i < argResults.size(); i++)
 						this.results.add(i, null);
 				}
 
 				for (int i = 0; i < argResults.size(); i++) {
-					List<Boolean> boolList = argResults.get(i);
+					List<ImmutableBytesWritable> boolList = argResults.get(i);
 					if (boolList != null && !boolList.isEmpty()) {
 						this.results.set(i, boolList);
 						//System.out.println("In MigrateLocksCallBack, at index: " + i + " adding boolList. "
@@ -208,14 +208,14 @@ public class LockMigrator extends HasThread implements Runnable {
 		//System.out.println("Last logId: " + lastLogId.toString());
 		MigrateLocksCallBack migrateLocksCallBack = new MigrateLocksCallBack();
 		logTable.coprocessorExec(WALManagerDistTxnProtocol.class, null, null,
-				new Batch.Call<WALManagerDistTxnProtocol, List<List<Boolean>>>() {
+				new Batch.Call<WALManagerDistTxnProtocol, List<List<ImmutableBytesWritable>>>() {
 					@Override
-					public List<List<Boolean>> call(WALManagerDistTxnProtocol instance)
+					public List<List<ImmutableBytesWritable>> call(WALManagerDistTxnProtocol instance)
 							throws IOException {
 						return instance.migrateLocks(id, logIdList, keyLists, destLogId);
 					}
 				}, migrateLocksCallBack);
-		List<List<Boolean>> results = migrateLocksCallBack.getResults();
+		List<List<ImmutableBytesWritable>> results = migrateLocksCallBack.getResults();
 		
 		// Gather the migration results and store them in a map. Use this map while acquiring and
 		// releasing locks.
@@ -224,20 +224,26 @@ public class LockMigrator extends HasThread implements Runnable {
 		for (int i = 0; i < keyLists.size(); i++) {
 			List<ImmutableBytesWritable> keyList = keyLists.get(i);
 			LogId origLogId = logIdList.get(i);
-			List<Boolean> boolList = results.get(i);
-			assert(boolList.size() == keyList.size());
+			List<ImmutableBytesWritable> migratedLockPositions = results.get(i);
+			assert(migratedLockPositions.size() == keyList.size());
 			for (int j = 0; j < keyList.size(); j++) {
 				ImmutableBytesWritable key = keyList.get(j);
 				sysout ("For logId: " + origLogId.toString() + ", key: " + Bytes.toString(key.get()));
-				boolean isMigrated = boolList.get(j);	
+				ImmutableBytesWritable migratedLockPosition = migratedLockPositions.get(j);
+				boolean isMigrated = false;
+				LogId migratedLogId = WALTableProperties.getLogIdFromMigratedKey(migratedLockPosition.get());
+				if (migratedLogId.equals(destLogId)) {
+					isMigrated = true;
+				}
+				
 				if (isMigrated) {
-					destLogId.setCommitType(LogId.ONLY_DELETE);
-					afterMigrationKeyMap.put(key, destLogId);
-					sysout ("destination logId is: " + destLogId.toString());
+					migratedLogId.setCommitType(LogId.ONLY_DELETE);
+					afterMigrationKeyMap.put(key, migratedLogId);
+					sysout ("migrated logId is: " + migratedLogId.toString());
 				} else {
-					origLogId.setCommitType(LogId.ONLY_UNLOCK);
-					afterMigrationKeyMap.put(key, origLogId);
-					sysout ("destination logId is: " + origLogId.toString());
+					migratedLogId.setCommitType(LogId.ONLY_UNLOCK);
+					afterMigrationKeyMap.put(key, migratedLogId);
+					sysout ("migrated logId is: " + migratedLogId.toString());
 				}
 			}
 		}

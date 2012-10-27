@@ -105,11 +105,12 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 						+ t.getName() + e);
 			}
 		};
-		
-		// BIGNOTE: Since transactions are synchronously flushing, we won't need an asynchronous
+
+		// BIGNOTE: Since transactions are synchronously flushing, we won't need an
+		// asynchronous
 		// storeUpdater.
 		// Threads.setDaemonThreadRunning(this.storeUpdater.getThread(),
-		//		".StoreUpdater", handler);
+		// ".StoreUpdater", handler);
 	}
 
 	@Override
@@ -493,14 +494,17 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 			// Once we move to a consistent hashing style mechanism, we
 			// should switch
 			// to the "writing to slaves" mechanism for persistance.
-			// TODO: This WALEdit should also contain all the information related to "Causal Lock Updates";
-			// they are supposed to be first committed onto the local WAL and then flushed onto the
+			// TODO: This WALEdit should also contain all the information related to
+			// "Causal Lock Updates";
+			// they are supposed to be first committed onto the local WAL and then
+			// flushed onto the
 			// remote WALs.
 			WALEdit walEdit = new WALEdit();
 			long now = EnvironmentEdgeManager.currentTimeMillis();
 			HLog log = env.getRegion().getLog();
-			HTableDescriptor htd = new HTableDescriptor(WALTableProperties.dataTableName);
-			
+			HTableDescriptor htd = new HTableDescriptor(
+					WALTableProperties.dataTableName);
+
 			for (Write w : writes) {
 				KeyValue kv = new KeyValue(w.getKey(), WALTableProperties.dataFamily, w
 						.getName(), w.getValue());
@@ -543,7 +547,8 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 			}
 			timestampMap.put(currentTs, val);
 
-			// Flush these writes onto the local region, since we assume that data items under a write-ahead-log
+			// Flush these writes onto the local region, since we assume that data
+			// items under a write-ahead-log
 			// are placed in the same region hosting the WAL.
 			flushLogEntryToLocalRegion(region, newLogEntry);
 
@@ -665,15 +670,16 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 		WALEdit walEdit = new WALEdit();
 		long now = EnvironmentEdgeManager.currentTimeMillis();
 		HLog log = region.getLog();
-		HTableDescriptor htd = new HTableDescriptor(WALTableProperties.dataTableName);
-		
+		HTableDescriptor htd = new HTableDescriptor(
+				WALTableProperties.dataTableName);
+
 		for (Write w : logEntry.getWrites()) {
 			KeyValue kv = new KeyValue(w.getKey(), WALTableProperties.dataFamily, w
 					.getName(), w.getValue());
 			walEdit.add(kv);
 		}
-		log.append(region.getRegionInfo(),
-				WALTableProperties.dataTableName, walEdit, now, htd);
+		log.append(region.getRegionInfo(), WALTableProperties.dataTableName,
+				walEdit, now, htd);
 
 		for (Write w : logEntry.getWrites()) {
 			String writeName = Bytes.toString(w.getName());
@@ -840,11 +846,15 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 	// placed
 	// or it is being locked. Thus indirection is attempted in the first place
 	// only if there is no lock.
-	public boolean migrateLock(final Long transactionId, final LogId logId,
-			final ImmutableBytesWritable key, final LogId destLogId,
-			final ImmutableBytesWritable destKey) throws IOException {
+	public ImmutableBytesWritable migrateLock(final Long transactionId,
+			final LogId logId, final ImmutableBytesWritable key,
+			final LogId destLogId, final ImmutableBytesWritable destKey)
+			throws IOException {
 		RegionCoprocessorEnvironment env = (RegionCoprocessorEnvironment) getEnvironment();
 		HRegion region = env.getRegion();
+
+		byte[] tableCachedLock = Bytes.toBytes(Bytes.toString(logId.getKey())
+				+ WALTableProperties.logAndKeySeparator + Bytes.toString(key.get()));
 
 		String localKey = Bytes.toString(logId.getKey())
 				+ WALTableProperties.logAndKeySeparator + Bytes.toString(key.get())
@@ -853,16 +863,19 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 		HashedBytes rowKey = new HashedBytes(Bytes.toBytes(localKey));
 		CountDownLatch rowLatch = new CountDownLatch(1);
 		CountDownLatch existingLatch = lockedRows.get(rowKey);
-		if (existingLatch != null)
-			return false;
 
-		// Return if the row has a lock -- i.e., the value is 1.
+		boolean canAttemptMigration = true;
+
+		if (existingLatch != null)
+			canAttemptMigration = false;
+
+		// Don't attempt migration if the row has a lock -- i.e., the value is 1.
 		TreeMap<Long, byte[]> timestampMap = myKVSpace.get(localKey);
 		if (timestampMap != null) {
 			byte[] existingVal = timestampMap
 					.get(WALTableProperties.GENERIC_TIMESTAMP);
 			if (Bytes.toLong(existingVal) != WALTableProperties.zero) {
-				return false;
+				canAttemptMigration = false;
 			}
 		}
 
@@ -885,30 +898,37 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 		 * one Call this.result = result; } }
 		 */
 
-		// TODO: Make this a global variable. Aren't we using a HTable in
-		// StoreUpdater?
-		HTable logTable = new HTable(this.conf, WALTableProperties.walTableName);
-
 		String destination = Bytes.toString(destLogId.getKey())
 				+ WALTableProperties.logAndKeySeparator + Bytes.toString(destKey.get());
 
-		byte[] destinationKey = Bytes.toBytes(destination);
-		// HRegionLocation location = logTable.getRegionLocation(destLogId.getKey(),
-		// false);
-		// sysout(location.toString());
-		Put p = new Put(destinationKey);
-		p
-				.add(WALTableProperties.WAL_FAMILY, WALTableProperties.writeLockColumn,
-						WALTableProperties.appTimestamp, Bytes
-								.toBytes(WALTableProperties.zero));
-		p.add(WALTableProperties.WAL_FAMILY,
-				WALTableProperties.isLockMigratedColumn,
-				WALTableProperties.appTimestamp, Bytes.toBytes(WALTableProperties.two));
-		p.add(WALTableProperties.WAL_FAMILY,
-				WALTableProperties.isLockPlacedOrMigratedColumn,
-				WALTableProperties.appTimestamp, Bytes.toBytes(WALTableProperties.one));
-		logTable.put(p);
-		logTable.flushCommits();
+		byte[] selfPlacedDestinationKey = Bytes.toBytes(destination);
+
+		// TODO: Make this a global variable. Aren't we using a HTable in
+		// StoreUpdater?
+		HTable logTable = new HTable(this.conf, WALTableProperties.walTableName);
+		
+		if (canAttemptMigration) {
+			// HRegionLocation location =
+			// logTable.getRegionLocation(destLogId.getKey(),
+			// false);
+			// sysout(location.toString());
+			Put p = new Put(selfPlacedDestinationKey);
+			p.add(WALTableProperties.WAL_FAMILY, WALTableProperties.writeLockColumn,
+					WALTableProperties.appTimestamp, Bytes
+							.toBytes(WALTableProperties.zero));
+			p.add(WALTableProperties.WAL_FAMILY,
+					WALTableProperties.isLockMigratedColumn,
+					WALTableProperties.appTimestamp, Bytes
+							.toBytes(WALTableProperties.two));
+			p.add(WALTableProperties.WAL_FAMILY,
+					WALTableProperties.isLockPlacedOrMigratedColumn,
+					WALTableProperties.appTimestamp, Bytes
+							.toBytes(WALTableProperties.one));
+			logTable.put(p);
+			logTable.flushCommits();
+
+			sysout("Finished adding a lock at the remote logId");
+		}
 
 		/*
 		 * AddLockAtWALCallBack addLockCallBack = new AddLockAtWALCallBack(); try {
@@ -925,119 +945,176 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 		 * addLockCallBack.getResult();
 		 */
 
-		sysout("Finished adding a lock at the remote logId");
-
 		// Acquire the lock on the localKey, and then place the indirection.
 		existingLatch = lockedRows.putIfAbsent(rowKey, rowLatch);
 		if (existingLatch != null) {
 			sysout("There is a latch! RETURNING!");
-			return false;
+			canAttemptMigration = false;
 		}
-		boolean migrationResult;
-		try {
-			// For now, we don't do any in-memory indirection placement because then
-			// when the locks are removed, we'll also have to remove this in-memory
-			// indirection
-			// which will need coprocessor call from another coprocessor.
-			/*
-			 * // Check if indirection can be placed -- no one has placed a lock or an
-			 * // indirection in the mean time. timestampMap =
-			 * myKVSpace.get(localKey); if (timestampMap != null) { byte[] existingVal
-			 * = timestampMap .get(WALTableProperties.GENERIC_TIMESTAMP); if
-			 * (!Bytes.equals(existingVal, Bytes.toBytes(WALTableProperties.zero))) {
-			 * return false; } }
-			 * 
-			 * // Place the indirection. timestampMap = myKVSpace.get(localKey); if
-			 * (timestampMap == null) { timestampMap = new TreeMap<Long, byte[]>();
-			 * myKVSpace.put(localKey, timestampMap); }
-			 * timestampMap.put(WALTableProperties.GENERIC_TIMESTAMP, indirectionKey);
-			 */
+		boolean migrationResult = false;
 
-			// We shall also create a key in HTable for indirection because locking is
-			// being performed
-			// on HTable, as HBase isn't allowing calling another coprocessor through
-			// a coprocessor.
-			// TODO: Think about the need for both (in-memory indirection placement --
-			// as done above,
-			// and also an indirection in HTable). We probably only need one.
-			// Can we make this a function call through HRegion?
-			// TODO: When multiple clients exist, we'll have to make the indirection
-			// placement
-			// through checkAndSet and remove this synchronization through in-memory
-			// hash maps.
-			// Basically, this whole function can be written as a pure HTable based
-			// migration.
-			byte[] tableCachedLock = Bytes.toBytes(Bytes.toString(logId.getKey())
-					+ WALTableProperties.logAndKeySeparator + Bytes.toString(key.get()));
-			p = new Put(tableCachedLock);
-			p.add(WALTableProperties.WAL_FAMILY, WALTableProperties.writeLockColumn,
-					WALTableProperties.appTimestamp, Bytes.toBytes(transactionId));
-			p.add(WALTableProperties.WAL_FAMILY,
-					WALTableProperties.isLockMigratedColumn,
-					WALTableProperties.appTimestamp, Bytes
-							.toBytes(WALTableProperties.one));
-			p.add(WALTableProperties.WAL_FAMILY,
-					WALTableProperties.isLockPlacedOrMigratedColumn,
-					WALTableProperties.appTimestamp, Bytes
-							.toBytes(WALTableProperties.one));
-			p.add(WALTableProperties.WAL_FAMILY,
-					WALTableProperties.destinationKeyColumn,
-					WALTableProperties.appTimestamp, destinationKey);
-			if (HRegion.rowIsInRange(region.getRegionInfo(), tableCachedLock)) {
-				migrationResult = region.checkAndMutate(tableCachedLock,
-						WALTableProperties.WAL_FAMILY,
+		if (canAttemptMigration) {
+			try {
+				// For now, we don't do any in-memory indirection placement because then
+				// when the locks are removed, we'll also have to remove this in-memory
+				// indirection
+				// which will need coprocessor call from another coprocessor.
+				/*
+				 * // Check if indirection can be placed -- no one has placed a lock or
+				 * an // indirection in the mean time. timestampMap =
+				 * myKVSpace.get(localKey); if (timestampMap != null) { byte[]
+				 * existingVal = timestampMap
+				 * .get(WALTableProperties.GENERIC_TIMESTAMP); if
+				 * (!Bytes.equals(existingVal, Bytes.toBytes(WALTableProperties.zero)))
+				 * { return false; } }
+				 * 
+				 * // Place the indirection. timestampMap = myKVSpace.get(localKey); if
+				 * (timestampMap == null) { timestampMap = new TreeMap<Long, byte[]>();
+				 * myKVSpace.put(localKey, timestampMap); }
+				 * timestampMap.put(WALTableProperties.GENERIC_TIMESTAMP,
+				 * indirectionKey);
+				 */
+
+				// We shall also create a key in HTable for indirection because locking
+				// is
+				// being performed
+				// on HTable, as HBase isn't allowing calling another coprocessor
+				// through
+				// a coprocessor.
+				// TODO: Think about the need for both (in-memory indirection placement
+				// --
+				// as done above,
+				// and also an indirection in HTable). We probably only need one.
+				// Can we make this a function call through HRegion?
+				// TODO: When multiple clients exist, we'll have to make the indirection
+				// placement
+				// through checkAndSet and remove this synchronization through in-memory
+				// hash maps.
+				// Basically, this whole function can be written as a pure HTable based
+				// migration.
+				Put p = new Put(tableCachedLock);
+				p.add(WALTableProperties.WAL_FAMILY,
+						WALTableProperties.writeLockColumn,
+						WALTableProperties.appTimestamp, Bytes.toBytes(transactionId));
+				p.add(WALTableProperties.WAL_FAMILY,
+						WALTableProperties.isLockMigratedColumn,
+						WALTableProperties.appTimestamp, Bytes
+								.toBytes(WALTableProperties.one));
+				p.add(WALTableProperties.WAL_FAMILY,
 						WALTableProperties.isLockPlacedOrMigratedColumn,
-						CompareFilter.CompareOp.EQUAL, new BinaryComparator(Bytes
-								.toBytes(WALTableProperties.zero)), p, null, true);
-			} else {
-				migrationResult = logTable.checkAndPut(tableCachedLock,
-						WALTableProperties.WAL_FAMILY,
-						WALTableProperties.isLockPlacedOrMigratedColumn, Bytes
-								.toBytes(WALTableProperties.zero), p);
-			}
-
-			if (migrationResult == false) {
-				Get g = new Get(tableCachedLock);
-				g.addColumn(WALTableProperties.WAL_FAMILY,
-						WALTableProperties.writeLockColumn);
-				g.addColumn(WALTableProperties.WAL_FAMILY,
-						WALTableProperties.isLockMigratedColumn);
-				g.addColumn(WALTableProperties.WAL_FAMILY,
-						WALTableProperties.destinationKeyColumn);
-				Result r = null;
+						WALTableProperties.appTimestamp, Bytes
+								.toBytes(WALTableProperties.one));
+				p.add(WALTableProperties.WAL_FAMILY,
+						WALTableProperties.destinationKeyColumn,
+						WALTableProperties.appTimestamp, selfPlacedDestinationKey);
 				if (HRegion.rowIsInRange(region.getRegionInfo(), tableCachedLock)) {
-					r = region.get(g, null);
-					// If r is empty, that means there was no lock created in the first
-					// place.
-					// Thus create it and mark it as migrated.
-					if (r.isEmpty()) {
-						region.put(p);
-						migrationResult = true;
-					}
+					migrationResult = region.checkAndMutate(tableCachedLock,
+							WALTableProperties.WAL_FAMILY,
+							WALTableProperties.isLockPlacedOrMigratedColumn,
+							CompareFilter.CompareOp.EQUAL, new BinaryComparator(Bytes
+									.toBytes(WALTableProperties.zero)), p, null, true);
 				} else {
-					r = logTable.get(g);
-					if (r.isEmpty()) {
-						logTable.put(p);
-						migrationResult = true;
+					migrationResult = logTable.checkAndPut(tableCachedLock,
+							WALTableProperties.WAL_FAMILY,
+							WALTableProperties.isLockPlacedOrMigratedColumn, Bytes
+									.toBytes(WALTableProperties.zero), p);
+				}
+
+				if (migrationResult == false) {
+					Get g = new Get(tableCachedLock);
+					g.addColumn(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.writeLockColumn);
+					g.addColumn(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.isLockMigratedColumn);
+					g.addColumn(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.isLockPlacedOrMigratedColumn);
+					g.addColumn(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.destinationKeyColumn);
+					Result r = null;
+					if (HRegion.rowIsInRange(region.getRegionInfo(), tableCachedLock)) {
+						r = region.get(g, null);
+						// If r is empty, that means there was no lock created in the first
+						// place.
+						// Thus create it and mark it as migrated.
+						if (r.isEmpty()) {
+							region.put(p);
+							migrationResult = true;
+						}
+					}
+
+					if (migrationResult == true) {
+						sysout("PLACED A DETOUR AT CACHED LOCK: "
+								+ Bytes.toString(tableCachedLock));
+						return new ImmutableBytesWritable(selfPlacedDestinationKey);
+					}
+				}
+			} finally {
+				// Remove the lock on the localKey.
+				CountDownLatch internalRowLatch = lockedRows.remove(rowKey);
+				// Note that no one is really waiting on our latch!
+				if (internalRowLatch != null)
+					internalRowLatch.countDown();
+				logTable.flushCommits();
+				logTable.close();
+			}
+		}
+
+		// If the function reached this line, then we're either not allowed to
+		// migrate
+		// or that migration failed. In either case, read the present migration
+		// information
+		// on the lock and return that to client.
+
+		// The key to which this lock was migrated by some other transaction.
+		// If this lock is acquired by some other trx, then existingDestinationKey
+		// will be this same tableCachedLock.
+		byte[] existingDestinationKey = tableCachedLock;
+
+		if (migrationResult == false) {
+			Get g = new Get(tableCachedLock);
+			g.addColumn(WALTableProperties.WAL_FAMILY,
+					WALTableProperties.writeLockColumn);
+			g.addColumn(WALTableProperties.WAL_FAMILY,
+					WALTableProperties.isLockMigratedColumn);
+			g.addColumn(WALTableProperties.WAL_FAMILY,
+					WALTableProperties.isLockPlacedOrMigratedColumn);
+			g.addColumn(WALTableProperties.WAL_FAMILY,
+					WALTableProperties.destinationKeyColumn);
+			Result r = null;
+			if (HRegion.rowIsInRange(region.getRegionInfo(), tableCachedLock)) {
+				r = region.get(g, null);
+				if (!r.isEmpty()) {
+					// Check for migration info and write lock. If some one else
+					// migrated, note
+					// that destinationKey and send it back to client. Otherwise, if no
+					// one
+					// migrated and someone has placed a lock, then come back to this
+					// same
+					// lock for acquisition.
+					long isLockMigratedColumnInfo = Bytes.toLong(r.getValue(
+							WALTableProperties.WAL_FAMILY,
+							WALTableProperties.isLockMigratedColumn));
+
+					long lockInfo = Bytes.toLong(r
+							.getValue(WALTableProperties.WAL_FAMILY,
+									WALTableProperties.writeLockColumn));
+					if (isLockMigratedColumnInfo == WALTableProperties.one) {
+						// Some other transaction placed a migration.
+						existingDestinationKey = r.getValue(WALTableProperties.WAL_FAMILY,
+								WALTableProperties.destinationKeyColumn);
+					} else {
+						// Come back to this same lock.
+						existingDestinationKey = tableCachedLock;
 					}
 				}
 			}
-			if (migrationResult) {
-				sysout("PLACED A DETOUR AT CACHED LOCK: "
-						+ Bytes.toString(tableCachedLock));
-			} else {
-				sysout("COULD NOT PLACE A DETOUR AT CACHED LOCK: "
-						+ Bytes.toString(tableCachedLock));
-			}
-		} finally {
-			// Remove the lock on the localKey.
-			CountDownLatch internalRowLatch = lockedRows.remove(rowKey);
-			// Note that no one is really waiting on our latch!
-			if (internalRowLatch != null)
-				internalRowLatch.countDown();
-			logTable.flushCommits();
-			logTable.close();
 		}
-		return migrationResult;
+
+		if (migrationResult == false) {
+			sysout("COULD NOT PLACE A DETOUR AT CACHED LOCK: "
+					+ Bytes.toString(tableCachedLock));
+		}
+
+		return new ImmutableBytesWritable(existingDestinationKey);
 	}
 }

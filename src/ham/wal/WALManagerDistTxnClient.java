@@ -1923,12 +1923,12 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 					if (Bytes.toString(logId.getKey()).
 							startsWith(TPCCTableProperties.districtWALPrefix)) {
 						sysout(trxId, "Found the district log Id: " + Bytes.toString(logId.getKey()));
+						sysout(trxId, "GIVING ONLY_UNLOCK attribute for destLogId: " + destLogId.toString());
 						destLogId.setCommitType(LogId.ONLY_UNLOCK);
 					}
+					sysout(trxId, "Adding this destLogId as it is: " + destLogId.toString());
+					sysout(trxId, "Its commit type is: " + destLogId.getCommitType());
 					destLogIds.add(destLogId);
-				} else {
-					logId.setCommitType(LogId.ONLY_UNLOCK);
-					destLogIds.add(logId);
 				}
 			}
 			allUpdates.add(updates);

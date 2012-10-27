@@ -42,7 +42,7 @@ public interface WALManagerDistTxnProtocol extends WALManagerProtocol {
   
   List<Snapshot> getSnapshotsForLogIds(List<LogId> logIdList) throws IOException;
   
-  List<List<Boolean>> migrateLocks(final Long transactionId, final List<LogId> logs, 
+  List<List<ImmutableBytesWritable>> migrateLocks(final Long transactionId, final List<LogId> logs, 
   		final List<List<ImmutableBytesWritable>> keys, final LogId destLogId) throws IOException;
 
   List<List<Result>> getAfterServerSideMerge(final List<LogId> logs, final List<List<Get>> gets) 

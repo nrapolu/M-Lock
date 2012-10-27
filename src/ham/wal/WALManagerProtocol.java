@@ -23,7 +23,7 @@ public interface WALManagerProtocol extends CoprocessorProtocol {
 	boolean addLock(LogId logId, ImmutableBytesWritable key) throws IOException;
 
 	// Migrate the lock for key from sourceLogId to destKey at destLogId.
-	boolean migrateLock(final Long transactionId, final LogId logId,
+	ImmutableBytesWritable migrateLock(final Long transactionId, final LogId logId,
 			final ImmutableBytesWritable key, final LogId destLogId,
 			final ImmutableBytesWritable destKey) throws IOException;
 }
