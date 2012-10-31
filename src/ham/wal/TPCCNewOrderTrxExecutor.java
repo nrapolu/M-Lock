@@ -91,14 +91,19 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 		gets.add(g);
 
 		// 3rd element in the tokens list will be "CustomerId"
+		// BIGNOTE: Customer keys should start with district and then warehouse, so that
+		// the requests are load balanced on the servers. However, the generated trx files
+		// have it in the reverse order. Until that is fixed, we don't issue a Get for
+		// customer info and correspondingly ignore the customerDiscount.
+		
 		byte[] customerKey = Bytes.toBytes(tokens[2]);
 		this.customerId = Bytes.toBytes(tokens[2].split(":")[2]);
-		g = new Get(customerKey);
-		g.addColumn(dataFamily, customerDiscountColumn);
-		g.addColumn(dataFamily, customerLastNameColumn);
-		g.addColumn(dataFamily, customerCreditColumn);
-		g.addColumn(dataFamily, versionColumn);
-		gets.add(g);
+//		g = new Get(customerKey);
+//		g.addColumn(dataFamily, customerDiscountColumn);
+//		g.addColumn(dataFamily, customerLastNameColumn);
+//		g.addColumn(dataFamily, customerCreditColumn);
+//		g.addColumn(dataFamily, versionColumn);
+//		gets.add(g);
 
 		// From 4th element in the tokens list, every alternate element points to an
 		// item id, and its next element denotes the warehouse from which it needs
@@ -163,9 +168,16 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 			// int districtTaxRate = Integer.parseInt(Bytes.toString(r.getValue(
 			// dataFamily, districtTaxRateColumn)));
 
-			r = results.get(2);
-			int customerDiscount = Integer.parseInt(Bytes.toString(r.getValue(
-					dataFamily, customerDiscountColumn)));
+			// BIGNOTE: Customer keys should start with district and then warehouse, so that
+			// the requests are load balanced on the servers. However, the generated trx files
+			// have it in the reverse order. Until that is fixed, we don't issue a Get for
+			// customer info and correspondingly ignore the customerDiscount.
+			// Once you uncomment the next line, you'll have to change the start index in the
+			// next for-loop.
+			
+			// r = results.get(2);
+			//int customerDiscount = Integer.parseInt(Bytes.toString(r.getValue(
+			//		dataFamily, customerDiscountColumn)));
 
 			// Create a Put to increase the districtNextOrder.
 			String districtKey = districtWALPrefix + Bytes.toString(homeWarehouseId) + ":"
@@ -219,7 +231,7 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 					.toString(trxId)));
 			walManagerDistTxnClient.put(dataTable, transactionState, newOrder);
 
-			for (int i = 3; i < results.size(); i = i + 2) {
+			for (int i = 2; i < results.size(); i = i + 2) {
 				long orderLineAmount;
 				Result itemResult = results.get(i);
 				String itemKey = Bytes.toString(itemResult.getRow());
@@ -296,8 +308,15 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 			// We measure time and attempts for each.
 			long startPutShadowTime = System.currentTimeMillis();
 			//System.out.println("MigrateLocks request status: " + migrateLocks);
+			// Generating salt by inverting the digits of homeWarehouseId. If it is 19, we make
+			// it 91. 
+			String homeWarehouseStr = Bytes.toString(homeWarehouseId);
+			String inverseWarehouseStr = "";
+			for (int i = 0; i < homeWarehouseStr.length(); i++) {
+				inverseWarehouseStr = homeWarehouseStr.substring(i, i+1) + inverseWarehouseStr;
+			}
 			walManagerDistTxnClient.putShadowObjects(logTable, dataTable,
-					transactionState, migrateLocks, Bytes.toString(homeWarehouseId));
+					transactionState, migrateLocks, inverseWarehouseStr);
 			long endPutShadowTime = System.currentTimeMillis();
 
 			long startPutTxnStateTime = System.currentTimeMillis();

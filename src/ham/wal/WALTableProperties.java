@@ -94,11 +94,12 @@ public class WALTableProperties {
 			}
 			splitKeys.add(Bytes.toBytes(":"));
 		}	else if (numSplits == 20) {
-			// We need the following splits !9::, 15, 1:, 25, 2:, 35, 3:, ..., 85, 8:, 95, :
-			//splitKeys.add(Bytes.toBytes("!9:::"));
+			// We need the following splits 10000000, 1:, 25, 2:, 35, 3:, ..., 85, 8:, 95, 9:, :
+			splitKeys.add(Bytes.toBytes("10000000"));
 			for (int i = 1; i <= 9; i++) {
 				String baseStr = new Integer(i).toString();
-				splitKeys.add(Bytes.toBytes(baseStr + "5"));
+				if (i != 1) 
+					splitKeys.add(Bytes.toBytes(baseStr + "5"));
 				//if (i != 9)
 				splitKeys.add(Bytes.toBytes(baseStr + ":"));
 			}

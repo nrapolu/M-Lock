@@ -55,7 +55,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 	}
 
 	public static void sysout(long trxId, String otp) {
-		//System.out.println(trxId + " : " + otp);
+		System.out.println(trxId + " : " + otp);
 	}
 
 	public DistTxnState beginTransaction() throws IOException {
@@ -621,17 +621,17 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 						results.add(i, null);
 				}
 
-				sysout(transactionState.getTransactionId(),
-						"In GetWithServerSideMergeCallBack, for row: "
-								+ Bytes.toString(row) + ", resultListList size is: "
-								+ resultListList.size());
+				// sysout(transactionState.getTransactionId(),
+				// "In GetWithServerSideMergeCallBack, for row: "
+				// + Bytes.toString(row) + ", resultListList size is: "
+				// + resultListList.size());
 
 				for (int i = 0; i < resultListList.size(); i++) {
 					List<Result> resultList = resultListList.get(i);
 					if (resultList != null && !resultList.isEmpty()) {
-						sysout(transactionState.getTransactionId(),
-								"Adding resultList at index: " + i + ", which is of size: "
-										+ resultList.size());
+						// sysout(transactionState.getTransactionId(),
+						// "Adding resultList at index: " + i + ", which is of size: "
+						// + resultList.size());
 						this.results.set(i, resultList);
 					}
 				}
@@ -666,10 +666,12 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		}
 
 		for (List<Result> resultList : resultListList) {
-			for (Result r : resultList) {
-				int index = getRowToIndexMap
-						.get(new ImmutableBytesWritable(r.getRow()));
-				finalResults.set(index, r);
+			if (resultList != null && !resultList.isEmpty()) {
+				for (Result r : resultList) {
+					int index = getRowToIndexMap.get(new ImmutableBytesWritable(r
+							.getRow()));
+					finalResults.set(index, r);
+				}
 			}
 		}
 
@@ -678,8 +680,8 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		// getWithVersionList
 		for (int i = 0; i < finalResults.size(); i++) {
 			Result r = finalResults.get(i);
-			sysout(transactionState.getTransactionId(), "Examining result : "
-					+ r.toString());
+			// sysout(transactionState.getTransactionId(), "Examining result : "
+			// + r.toString());
 			long version = 0;
 			try {
 				version = WALTableProperties.getVersion(r);
@@ -733,8 +735,8 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 	}
 
 	public void putShadowObjects(final HTable logTable, final HTable dataTable,
-			final DistTxnState transactionState, boolean shouldMigrateLocks, String preferredSalt)
-			throws InterruptedException, IOException {
+			final DistTxnState transactionState, boolean shouldMigrateLocks,
+			String preferredSalt) throws InterruptedException, IOException {
 		long trxId = transactionState.getTransactionId();
 
 		// The list to be sent to LockMigrator
@@ -1332,6 +1334,10 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 					LogId migratedToLogId = logs.get(indexOfMigratedKey);
 					LogId previousLogIdOfMigratedKey = dynamicMigrationMap
 							.get(migratedToLogId);
+					if (previousLogIdOfMigratedKey == null) {
+						previousLogIdOfMigratedKey = WALTableProperties
+								.getLogIdFromMigratedKey(keys.get(indexOfMigratedKey).get());
+					}
 					logs.set(indexOfMigratedKey, previousLogIdOfMigratedKey);
 					// Make a note that migration is removed.
 					isKeyMigrated.set(indexOfMigratedKey, false);
@@ -1843,7 +1849,6 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 	boolean commitWritesPerEntityGroupWithShadows(final HTable table,
 			final DistTxnState transactionState) throws Throwable {
 		final long trxId = transactionState.getTransactionId();
-		sysout(trxId, "Inside commit writes per entity group");
 		// Collect the writeBufferPerLogId and send it off to the server-side
 		// coprocessor.
 		// The coprocessor should simply remove locks on write-keys, change their
@@ -1879,7 +1884,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 				// coprocessor exec request
 				// to all WAL logs involved in the trx.
 				entityGroupCommitResult = entityGroupCommitResult && result;
-				sysout(trxId, "In EntityGroupCommitCallBack, result is: " + result);
+				// sysout(trxId, "In EntityGroupCommitCallBack, result is: " + result);
 			}
 
 			boolean getResult() {
@@ -1911,23 +1916,37 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 				LogId destLogId = LockMigrator.afterMigrationKeyMap
 						.get(new ImmutableBytesWritable(action.getAction().getRow()));
 				if (destLogId != null) {
-					// BIG NOTE: We are disabling "greedy eviction" for districtNextOrderId lock.
-					// We are doing this by making the update to lock in lock-table as ONLY_UNLOCK
-					// instead of ONLY_DELETE. This is what will ideally be done by the clustering
-					// process on the lock-table. The process won't evict this lock as it will 
-					// be used frequently. It could evict the other locks, which are mostly
-					// for stock table, and also are infrequently re-used. Now, this change here
-					// is TPCC specific. We can't be doing this change in WALManagerDistTxnClient
-					// as its a very generic class. We need to figure out another way of doing this.
-					// Ideally, it should be done by the clustering process on the lock-table.
-					if (Bytes.toString(logId.getKey()).
-							startsWith(TPCCTableProperties.districtWALPrefix)) {
-						sysout(trxId, "Found the district log Id: " + Bytes.toString(logId.getKey()));
-						sysout(trxId, "GIVING ONLY_UNLOCK attribute for destLogId: " + destLogId.toString());
+					// BIG NOTE: We are disabling "greedy eviction" for
+					// districtNextOrderId lock.
+					// We are doing this by making the update to lock in lock-table as
+					// ONLY_UNLOCK
+					// instead of ONLY_DELETE. This is what will ideally be done by the
+					// clustering
+					// process on the lock-table. The process won't evict this lock as it
+					// will
+					// be used frequently. It could evict the other locks, which are
+					// mostly
+					// for stock table, and also are infrequently re-used. Now, this
+					// change here
+					// is TPCC specific. We can't be doing this change in
+					// WALManagerDistTxnClient
+					// as its a very generic class. We need to figure out another way of
+					// doing this.
+					// Ideally, it should be done by the clustering process on the
+					// lock-table.
+					if (Bytes.toString(logId.getKey()).startsWith(
+							TPCCTableProperties.districtWALPrefix)) {
+						// sysout(trxId, "Found the district log Id: "
+						// + Bytes.toString(logId.getKey()));
+						// sysout(trxId, "GIVING ONLY_UNLOCK attribute for destLogId: "
+						// + destLogId.toString());
 						destLogId.setCommitType(LogId.ONLY_UNLOCK);
 					}
-					sysout(trxId, "Adding this destLogId as it is: " + destLogId.toString());
-					sysout(trxId, "Its commit type is: " + destLogId.getCommitType());
+					// BIGNOTE: We are disabling all deletes to debug deadlocks.
+					destLogId.setCommitType(LogId.ONLY_UNLOCK);
+					sysout(trxId, "Adding this destLogId for commit: "
+							+ destLogId.toString() + " with commit type: "
+							+ destLogId.getCommitType());
 					destLogIds.add(destLogId);
 				}
 			}
@@ -1974,7 +1993,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 				// coprocessor exec request
 				// to all WAL logs involved in the trx.
 				abortResult = abortResult && result;
-				sysout(trxId, "In AbortCallBack, result is: " + result);
+				//sysout(trxId, "In AbortCallBack, result is: " + result);
 			}
 
 			boolean getResult() {
@@ -2013,9 +2032,39 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 							+ ", adding key: " + Bytes.toString(action.getAction().getRow()));
 					keysToBeUnlocked.add(key);
 					LogId destLogId = LockMigrator.afterMigrationKeyMap.get(key);
-					if (destLogId != null)
+					if (destLogId != null) {
+						// BIG NOTE: We are disabling "greedy eviction" for
+						// districtNextOrderId lock.
+						// We are doing this by making the update to lock in lock-table as
+						// ONLY_UNLOCK
+						// instead of ONLY_DELETE. This is what will ideally be done by the
+						// clustering
+						// process on the lock-table. The process won't evict this lock as
+						// it will
+						// be used frequently. It could evict the other locks, which are
+						// mostly
+						// for stock table, and also are infrequently re-used. Now, this
+						// change here
+						// is TPCC specific. We can't be doing this change in
+						// WALManagerDistTxnClient
+						// as its a very generic class. We need to figure out another way of
+						// doing this.
+						// Ideally, it should be done by the clustering process on the
+						// lock-table.
+						if (Bytes.toString(logId.getKey()).startsWith(
+								TPCCTableProperties.districtWALPrefix)) {
+							//sysout(trxId, "Found the district log Id: "
+							//		+ Bytes.toString(logId.getKey()));
+							//sysout(trxId, "GIVING ONLY_UNLOCK attribute for destLogId: "
+							//		+ destLogId.toString());
+							destLogId.setCommitType(LogId.ONLY_UNLOCK);
+						}
+
+						// BIGNOTE: We never delete migration; always simply unlock.
+						destLogId.setCommitType(LogId.ONLY_UNLOCK);
 						destLogIds.add(destLogId);
-					else {
+					} else {
+						sysout(trxId, "In abort, destLogId is null!");
 						logId.setCommitType(LogId.ONLY_UNLOCK);
 						destLogIds.add(logId);
 					}

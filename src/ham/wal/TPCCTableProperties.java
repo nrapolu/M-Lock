@@ -46,6 +46,7 @@ public class TPCCTableProperties extends WALTableProperties {
 	int constantDiscount = 10;
 
 	int numItemsPerWarehouse = 100000;
+	int numCustomersPerDistrict = 3000;
 	
 	public TPCCTableProperties(Configuration conf, HBaseAdmin admin) {
 		super(conf, admin);
@@ -60,6 +61,7 @@ public class TPCCTableProperties extends WALTableProperties {
 	public void populateDataTableEntries(long numWarehouses, boolean writeBlob)
 			throws IOException, InterruptedException {
 		HTable hDataTable = new HTable(conf, dataTableName);
+		hDataTable.setAutoFlush(false);
 		hDataTable.setWriteBufferSize(numWarehouses * 1000 * 1000);
 		byte[] blob = new byte[BLOB_SIZE];
 		// Populate the WAREHOUSE table.
@@ -128,8 +130,8 @@ public class TPCCTableProperties extends WALTableProperties {
 		// Populate the Customer table. Each district has 3000 customers.
 		for (long i = 1; i <= numWarehouses; i++) {
 			for (long j = 1; j <= 10; j++) {
-				for (long k = 1; k <= 3000; k++) {
-					String key = Long.toString(i) + ":" + Long.toString(j) + ":"
+				for (long k = 1; k <= numCustomersPerDistrict; k++) {
+					String key = Long.toString(j) + ":" + Long.toString(i) + ":"
 							+ Long.toString(k) + ":" + "customer";
 					Put p = new Put(Bytes.toBytes(key));
 					p.add(dataFamily, customerDiscountColumn, appTimestamp, Bytes.toBytes(Integer
@@ -267,7 +269,7 @@ public class TPCCTableProperties extends WALTableProperties {
 		// Populate the Customer table. Each district has 3000 customers.
 		for (long i = 1; i <= numWarehouses; i++) {
 			for (long j = 1; j <= 10; j++) {
-				for (long k = 1; k <= 3000; k++) {
+				for (long k = 1; k <= numCustomersPerDistrict; k++) {
 					String keyStr = Long.toString(i) + ":" + Long.toString(j) + ":"
 							+ Long.toString(k) + ":" + "customer";
 					byte[] key = Bytes.toBytes(keyStr);
@@ -320,6 +322,9 @@ public class TPCCTableProperties extends WALTableProperties {
 
 		logTable.flushCommits();
 		logTable.close();
+		// Turn the load balancer off.
+		admin.balanceSwitch(false);
+		
 		System.out.println("Wrote default lock data!");
 	}
 }
