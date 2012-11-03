@@ -83,7 +83,7 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 	private boolean stopped = false;
 
 	public static void sysout(String otp) {
-		//System.out.println(otp);
+		// System.out.println(otp);
 	}
 
 	@Override
@@ -572,6 +572,18 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 					sysout("ONLY DELETING KEY: "
 							+ Bytes.toString(toBeUnlockedDestKey.get()));
 					Delete delDest = new Delete(toBeUnlockedDestKey.get());
+					delDest.deleteColumn(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.writeLockColumn,
+							WALTableProperties.appTimestamp);
+					delDest.deleteColumn(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.isLockMigratedColumn,
+							WALTableProperties.appTimestamp);
+					delDest.deleteColumn(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.isLockPlacedOrMigratedColumn,
+							WALTableProperties.appTimestamp);
+					delDest.deleteColumn(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.regionObserverMarkerColumn,
+							WALTableProperties.appTimestamp);
 					secondSetOfCausalLockReleases.add(delDest);
 				} else if (commitTypeInfo.get(index) == LogId.ONLY_UNLOCK) {
 					sysout("ONLY UNLOCKING KEY: "
@@ -585,6 +597,9 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 							WALTableProperties.isLockPlacedOrMigratedColumn,
 							WALTableProperties.appTimestamp, Bytes
 									.toBytes(WALTableProperties.zero));
+					p.add(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.regionObserverMarkerColumn,
+							WALTableProperties.appTimestamp, WALTableProperties.randomValue);
 					if (HRegion.rowIsInRange(region.getRegionInfo(), toBeUnlockedDestKey
 							.get())) {
 						region.put(p);
@@ -607,6 +622,9 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 							WALTableProperties.isLockPlacedOrMigratedColumn,
 							WALTableProperties.appTimestamp, Bytes
 									.toBytes(WALTableProperties.zero));
+					pSrc.add(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.regionObserverMarkerColumn,
+							WALTableProperties.appTimestamp, WALTableProperties.randomValue);
 					if (HRegion.rowIsInRange(region.getRegionInfo(), toBeUnlockedDestKey
 							.get())) {
 						region.put(pSrc);
@@ -883,6 +901,9 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 				WALTableProperties.isLockPlacedOrMigratedColumn);
 		g.addColumn(WALTableProperties.WAL_FAMILY,
 				WALTableProperties.destinationKeyColumn);
+		g.addColumn(WALTableProperties.WAL_FAMILY,
+				WALTableProperties.regionObserverMarkerColumn);
+		g.setTimeStamp(WALTableProperties.appTimestamp);
 		Result r = null;
 		if (HRegion.rowIsInRange(region.getRegionInfo(), tableCachedLock)) {
 			r = region.get(g, null);
@@ -927,7 +948,9 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 			p.add(WALTableProperties.WAL_FAMILY,
 					WALTableProperties.isLockPlacedOrMigratedColumn,
 					WALTableProperties.appTimestamp, Bytes
-							.toBytes(WALTableProperties.one));
+							.toBytes(WALTableProperties.zero));
+			p.add(WALTableProperties.WAL_FAMILY,
+					WALTableProperties.regionObserverMarkerColumn, WALTableProperties.randomValue);
 			logTable.put(p);
 			logTable.flushCommits();
 
@@ -969,6 +992,8 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 			p.add(WALTableProperties.WAL_FAMILY,
 					WALTableProperties.destinationKeyColumn,
 					WALTableProperties.appTimestamp, selfPlacedDestinationKey);
+			p.add(WALTableProperties.WAL_FAMILY,
+					WALTableProperties.regionObserverMarkerColumn, WALTableProperties.randomValue);
 			if (HRegion.rowIsInRange(region.getRegionInfo(), tableCachedLock)) {
 				migrationResult = region.checkAndMutate(tableCachedLock,
 						WALTableProperties.WAL_FAMILY,
@@ -997,6 +1022,9 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 						WALTableProperties.isLockPlacedOrMigratedColumn);
 				g.addColumn(WALTableProperties.WAL_FAMILY,
 						WALTableProperties.destinationKeyColumn);
+				g.addColumn(WALTableProperties.WAL_FAMILY,
+						WALTableProperties.regionObserverMarkerColumn);
+				g.setTimeStamp(WALTableProperties.appTimestamp);
 				if (HRegion.rowIsInRange(region.getRegionInfo(), tableCachedLock)) {
 					r = region.get(g, null);
 					// If r is empty, that means there was no lock created in the first
@@ -1038,6 +1066,9 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 					WALTableProperties.isLockPlacedOrMigratedColumn);
 			g.addColumn(WALTableProperties.WAL_FAMILY,
 					WALTableProperties.destinationKeyColumn);
+			g.addColumn(WALTableProperties.WAL_FAMILY,
+					WALTableProperties.regionObserverMarkerColumn);
+			g.setTimeStamp(WALTableProperties.appTimestamp);
 			if (HRegion.rowIsInRange(region.getRegionInfo(), tableCachedLock)) {
 				r = region.get(g, null);
 				if (!r.isEmpty()) {

@@ -79,6 +79,8 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 		Get g = new Get(homeWarehouseKey);
 		g.addColumn(dataFamily, warehouseTaxRateColumn);
 		g.addColumn(dataFamily, versionColumn);
+		g.addColumn(WAL_FAMILY, regionObserverMarkerColumn);
+		g.setTimeStamp(appTimestamp);
 		gets.add(g);
 
 		// 2nd element in the tokens list will be "DistrictId"
@@ -88,22 +90,29 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 		g.addColumn(dataFamily, districtTaxRateColumn);
 		g.addColumn(dataFamily, districtNextOrderIdColumn);
 		g.addColumn(dataFamily, versionColumn);
+		g.addColumn(WAL_FAMILY, regionObserverMarkerColumn);
+		g.setTimeStamp(appTimestamp);
 		gets.add(g);
 
 		// 3rd element in the tokens list will be "CustomerId"
-		// BIGNOTE: Customer keys should start with district and then warehouse, so that
-		// the requests are load balanced on the servers. However, the generated trx files
-		// have it in the reverse order. Until that is fixed, we don't issue a Get for
+		// BIGNOTE: Customer keys should start with district and then warehouse, so
+		// that
+		// the requests are load balanced on the servers. However, the generated trx
+		// files
+		// have it in the reverse order. Until that is fixed, we don't issue a Get
+		// for
 		// customer info and correspondingly ignore the customerDiscount.
-		
+
 		byte[] customerKey = Bytes.toBytes(tokens[2]);
 		this.customerId = Bytes.toBytes(tokens[2].split(":")[2]);
-//		g = new Get(customerKey);
-//		g.addColumn(dataFamily, customerDiscountColumn);
-//		g.addColumn(dataFamily, customerLastNameColumn);
-//		g.addColumn(dataFamily, customerCreditColumn);
-//		g.addColumn(dataFamily, versionColumn);
-//		gets.add(g);
+		// g = new Get(customerKey);
+		// g.addColumn(dataFamily, customerDiscountColumn);
+		// g.addColumn(dataFamily, customerLastNameColumn);
+		// g.addColumn(dataFamily, customerCreditColumn);
+		// g.addColumn(dataFamily, versionColumn);
+		// g.addColumn(WAL_FAMILY, regionObserverMarkerColumn);
+		// g.setTimestamp(appTimestamp);
+		// gets.add(g);
 
 		// From 4th element in the tokens list, every alternate element points to an
 		// item id, and its next element denotes the warehouse from which it needs
@@ -117,6 +126,8 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 			g.addColumn(dataFamily, itemPriceColumn);
 			g.addColumn(dataFamily, itemNameColumn);
 			g.addColumn(dataFamily, versionColumn);
+			g.addColumn(WAL_FAMILY, regionObserverMarkerColumn);
+			g.setTimeStamp(appTimestamp);
 			gets.add(g);
 
 			// Prepare a Get to fetch information from Stock table for this item.
@@ -125,6 +136,8 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 			g = new Get(Bytes.toBytes(keyForStockTable));
 			g.addColumn(dataFamily, stockQuantityColumn);
 			g.addColumn(dataFamily, versionColumn);
+			g.addColumn(WAL_FAMILY, regionObserverMarkerColumn);
+			g.setTimeStamp(appTimestamp);
 			gets.add(g);
 		}
 		return gets;
@@ -153,8 +166,8 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 			// snapshot
 			// or through the data store.
 			long startReadTime = System.currentTimeMillis();
-			List<Result> results = walManagerDistTxnClient.getWithServerSideMerge(logTable,
-					dataTable, transactionState, gets);
+			List<Result> results = walManagerDistTxnClient.getWithServerSideMerge(
+					logTable, dataTable, transactionState, gets);
 			long endReadTime = System.currentTimeMillis();
 
 			// Grab the information we need from the results.
@@ -168,26 +181,33 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 			// int districtTaxRate = Integer.parseInt(Bytes.toString(r.getValue(
 			// dataFamily, districtTaxRateColumn)));
 
-			// BIGNOTE: Customer keys should start with district and then warehouse, so that
-			// the requests are load balanced on the servers. However, the generated trx files
-			// have it in the reverse order. Until that is fixed, we don't issue a Get for
+			// BIGNOTE: Customer keys should start with district and then warehouse,
+			// so that
+			// the requests are load balanced on the servers. However, the generated
+			// trx files
+			// have it in the reverse order. Until that is fixed, we don't issue a Get
+			// for
 			// customer info and correspondingly ignore the customerDiscount.
-			// Once you uncomment the next line, you'll have to change the start index in the
+			// Once you uncomment the next line, you'll have to change the start index
+			// in the
 			// next for-loop.
-			
+
 			// r = results.get(2);
-			//int customerDiscount = Integer.parseInt(Bytes.toString(r.getValue(
-			//		dataFamily, customerDiscountColumn)));
+			// int customerDiscount = Integer.parseInt(Bytes.toString(r.getValue(
+			// dataFamily, customerDiscountColumn)));
 
 			// Create a Put to increase the districtNextOrder.
-			String districtKey = districtWALPrefix + Bytes.toString(homeWarehouseId) + ":"
-					+ Bytes.toString(districtId) + ":" + "district";
+			String districtKey = districtWALPrefix + Bytes.toString(homeWarehouseId)
+					+ ":" + Bytes.toString(districtId) + ":" + "district";
 
 			Put updatedDistrictNextOrderId = new Put(Bytes.toBytes(districtKey));
 			updatedDistrictNextOrderId.add(dataFamily, districtNextOrderIdColumn,
 					appTimestamp, Bytes.toBytes(Long.toString(districtNextOrderId + 1)));
 			updatedDistrictNextOrderId.add(dataFamily, versionColumn, appTimestamp,
 					Bytes.toBytes(Long.toString(trxId)));
+			updatedDistrictNextOrderId.add(WALTableProperties.WAL_FAMILY,
+					WALTableProperties.regionObserverMarkerColumn,
+					WALTableProperties.randomValue);
 			walManagerDistTxnClient.put(dataTable, transactionState,
 					updatedDistrictNextOrderId);
 
@@ -214,8 +234,8 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 			walManagerDistTxnClient.put(dataTable, transactionState, order);
 
 			// Create a Put to add info into the NewOrder table.
-			String newOrderKey = orderWALPrefix + Bytes.toString(homeWarehouseId) + ":"
-					+ Bytes.toString(districtId) + ":"
+			String newOrderKey = orderWALPrefix + Bytes.toString(homeWarehouseId)
+					+ ":" + Bytes.toString(districtId) + ":"
 					+ Long.toString(districtNextOrderId) + ":" + "order"
 					+ WALTableProperties.logAndKeySeparator
 					+ Bytes.toString(homeWarehouseId) + ":" + Bytes.toString(districtId)
@@ -229,6 +249,9 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 					homeWarehouseId);
 			newOrder.add(dataFamily, versionColumn, appTimestamp, Bytes.toBytes(Long
 					.toString(trxId)));
+			newOrder.add(WALTableProperties.WAL_FAMILY,
+					WALTableProperties.regionObserverMarkerColumn,
+					WALTableProperties.randomValue);
 			walManagerDistTxnClient.put(dataTable, transactionState, newOrder);
 
 			for (int i = 2; i < results.size(); i = i + 2) {
@@ -248,8 +271,8 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 						dataFamily, stockQuantityColumn)));
 				stockCount++;
 
-				//System.out.println("For itemKey: " + itemStockKey
-				//		+ "Final to-be-stock-count is: " + stockCount);
+				// System.out.println("For itemKey: " + itemStockKey
+				// + "Final to-be-stock-count is: " + stockCount);
 
 				// Create a Put with the new stock count.
 				Put p = new Put(Bytes.toBytes(itemStockKey));
@@ -257,10 +280,14 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 						Bytes.toBytes(Long.toString(stockCount)));
 				p.add(dataFamily, versionColumn, appTimestamp, Bytes.toBytes(Long
 						.toString(trxId)));
+				p.add(WALTableProperties.WAL_FAMILY,
+						WALTableProperties.regionObserverMarkerColumn,
+						WALTableProperties.randomValue);
 				walManagerDistTxnClient.put(dataTable, transactionState, p);
 
 				// Create a Put to update the orderline entry for this item.
-				String newOrderLineKey = orderWALPrefix + Bytes.toString(homeWarehouseId) + ":"
+				String newOrderLineKey = orderWALPrefix
+						+ Bytes.toString(homeWarehouseId) + ":"
 						+ Bytes.toString(districtId) + ":"
 						+ Long.toString(districtNextOrderId) + ":" + "order"
 						+ WALTableProperties.logAndKeySeparator
@@ -290,6 +317,8 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 						Bytes.toBytes("" + itemPrice));
 				orderLineEntry.add(dataFamily, versionColumn, appTimestamp, Bytes
 						.toBytes(Long.toString(trxId)));
+				orderLineEntry.add(WALTableProperties.WAL_FAMILY,
+						WALTableProperties.regionObserverMarkerColumn, WALTableProperties.randomValue);
 				walManagerDistTxnClient
 						.put(dataTable, transactionState, orderLineEntry);
 			}
@@ -307,20 +336,23 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 			// There can't be aborts while placing shadow objects or acquiring locks.
 			// We measure time and attempts for each.
 			long startPutShadowTime = System.currentTimeMillis();
-			//System.out.println("MigrateLocks request status: " + migrateLocks);
-			// Generating salt by inverting the digits of homeWarehouseId. If it is 19, we make
-			// it 91. 
+			// System.out.println("MigrateLocks request status: " + migrateLocks);
+			// Generating salt by inverting the digits of homeWarehouseId. If it is
+			// 19, we make
+			// it 91.
 			String homeWarehouseStr = Bytes.toString(homeWarehouseId);
 			String inverseWarehouseStr = "";
 			for (int i = 0; i < homeWarehouseStr.length(); i++) {
-				inverseWarehouseStr = homeWarehouseStr.substring(i, i+1) + inverseWarehouseStr;
+				inverseWarehouseStr = homeWarehouseStr.substring(i, i + 1)
+						+ inverseWarehouseStr;
 			}
 			walManagerDistTxnClient.putShadowObjects(logTable, dataTable,
 					transactionState, migrateLocks, inverseWarehouseStr);
 			long endPutShadowTime = System.currentTimeMillis();
 
 			long startPutTxnStateTime = System.currentTimeMillis();
-			walManagerDistTxnClient.putDistTxnState(logTable, transactionState, false);
+			walManagerDistTxnClient
+					.putDistTxnState(logTable, transactionState, false);
 			long endPutTxnStateTime = System.currentTimeMillis();
 
 			long startLockingTime = System.currentTimeMillis();
@@ -338,8 +370,8 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 							logTable, dataTable, transactionState);
 			long endVersionCheckTime = System.currentTimeMillis();
 
-			//System.out.println("CommitResponse after checkVersions: "
-			//		+ commitResponse);
+			// System.out.println("CommitResponse after checkVersions: "
+			// + commitResponse);
 			if (!commitResponse) {
 				// We abort here.
 				countOfAborts++;
@@ -352,8 +384,8 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 			commitResponse = commitResponse
 					&& walManagerDistTxnClient.commitWritesPerEntityGroupWithShadows(
 							logTable, transactionState);
-			//System.out.println("CommitResponse after commitWritesPerEntityGroup: "
-			//		+ commitResponse);
+			// System.out.println("CommitResponse after commitWritesPerEntityGroup: "
+			// + commitResponse);
 			if (!commitResponse) {
 				// We abort here.
 				countOfAborts++;

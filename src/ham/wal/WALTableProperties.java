@@ -20,27 +20,29 @@ import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.util.Bytes;
 
 public class WALTableProperties {
-	final static String WAL_TABLENAME = "WAL_Table";
-	final static byte[] WAL_FAMILY = Bytes.toBytes("WAL_FAMILY");
-	final static byte[] CURRENT_TS_COL = Bytes.toBytes("CURRENT_TS");
-	final static byte[] SYNC_TS_COL = Bytes.toBytes("SYNC_TS_COL");
-	final static byte[] OLDEST_TS_COL = Bytes.toBytes("OLDEST_TS_COL");
-	final static byte[] WAL_ENTRY_COL = Bytes.toBytes("WAL_ENTRY_COL");
-	final static long GENERIC_TIMESTAMP = 1;
+	public final static String WAL_TABLENAME = "WAL_Table";
+	public final static byte[] WAL_FAMILY = Bytes.toBytes("WAL_FAMILY");
+	public final static byte[] CURRENT_TS_COL = Bytes.toBytes("CURRENT_TS");
+	public final static byte[] SYNC_TS_COL = Bytes.toBytes("SYNC_TS_COL");
+	public final static byte[] OLDEST_TS_COL = Bytes.toBytes("OLDEST_TS_COL");
+	public final static byte[] WAL_ENTRY_COL = Bytes.toBytes("WAL_ENTRY_COL");
+	public final static long GENERIC_TIMESTAMP = 1;
 
-	final static byte[] dataTableName = Bytes.toBytes("DATA_TABLE");
+	public final static byte[] dataTableName = Bytes.toBytes("DATA_TABLE");
 	//final static byte[] walTableName = Bytes.toBytes(WAL_TABLENAME);
-	final static byte[] walTableName = Bytes.toBytes("DATA_TABLE");
-	final static byte[] dataFamily = Bytes.toBytes("DATA_FAMILY");
-	final static byte[] dataColumn = Bytes.toBytes("DATA_COLUMN");
-	final static byte[] versionColumn = Bytes.toBytes("VERSION_COLUMN");
-	final static byte[] writeLockColumn = Bytes.toBytes("WRITE_LOCK_COLUMN");
-	final static byte[] blobColumn = Bytes.toBytes("BLOB_COLUMN");
-	final static byte[] isLockMigratedColumn = Bytes.toBytes("IS_LOCK_MIGRATED");
-	final static byte[] isLockPlacedOrMigratedColumn = Bytes.toBytes("IS_LOCK_PLACED_OR_MIGRATED");
-	final static byte[] destinationKeyColumn = Bytes.toBytes("DESTINATION_KEY");
-	byte[] logFamily = WALTableProperties.WAL_FAMILY;
-	static long appTimestamp = Long.MAX_VALUE;
+	public final static byte[] walTableName = Bytes.toBytes("DATA_TABLE");
+	public final static byte[] dataFamily = Bytes.toBytes("DATA_FAMILY");
+	public final static byte[] dataColumn = Bytes.toBytes("DATA_COLUMN");
+	public final static byte[] versionColumn = Bytes.toBytes("VERSION_COLUMN");
+	public final static byte[] writeLockColumn = Bytes.toBytes("WRITE_LOCK_COLUMN");
+	public final static byte[] blobColumn = Bytes.toBytes("BLOB_COLUMN");
+	public final static byte[] isLockMigratedColumn = Bytes.toBytes("IS_LOCK_MIGRATED");
+	public final static byte[] isLockPlacedOrMigratedColumn = Bytes.toBytes("IS_LOCK_PLACED_OR_MIGRATED");
+	public final static byte[] destinationKeyColumn = Bytes.toBytes("DESTINATION_KEY");
+	
+	public final static byte[] regionObserverMarkerColumn = Bytes.toBytes("GO_THROUGH_REGION_OBSERVER");
+	public byte[] logFamily = WALTableProperties.WAL_FAMILY;
+	public static long appTimestamp = GENERIC_TIMESTAMP;
 
 	static long zero = 0;
 	static long one = 1;

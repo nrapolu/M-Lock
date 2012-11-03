@@ -390,6 +390,8 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 					p.add(WALTableProperties.WAL_FAMILY,
 							WALTableProperties.isLockPlacedOrMigratedColumn, appTimestamp,
 							Bytes.toBytes(WALTableProperties.one));
+					p.add(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.regionObserverMarkerColumn, WALTableProperties.randomValue);
 					toBePersistedPut = p;
 
 					if (HRegion.rowIsInRange(region.getRegionInfo(), indirectionKey)) {
@@ -427,6 +429,8 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 									WALTableProperties.isLockMigratedColumn);
 							g.addColumn(WALTableProperties.WAL_FAMILY,
 									WALTableProperties.destinationKeyColumn);
+							g.addColumn(WALTableProperties.WAL_FAMILY,
+									WALTableProperties.regionObserverMarkerColumn);
 							Result r = region.get(g, null);
 							if (!r.isEmpty()) {
 								// first guess is lock has been placed by someone else.
