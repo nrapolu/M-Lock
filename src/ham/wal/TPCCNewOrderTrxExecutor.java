@@ -206,7 +206,7 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 			updatedDistrictNextOrderId.add(dataFamily, versionColumn, appTimestamp,
 					Bytes.toBytes(Long.toString(trxId)));
 			updatedDistrictNextOrderId.add(WALTableProperties.WAL_FAMILY,
-					WALTableProperties.regionObserverMarkerColumn,
+					WALTableProperties.regionObserverMarkerColumn, appTimestamp,
 					WALTableProperties.randomValue);
 			walManagerDistTxnClient.put(dataTable, transactionState,
 					updatedDistrictNextOrderId);
@@ -250,7 +250,7 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 			newOrder.add(dataFamily, versionColumn, appTimestamp, Bytes.toBytes(Long
 					.toString(trxId)));
 			newOrder.add(WALTableProperties.WAL_FAMILY,
-					WALTableProperties.regionObserverMarkerColumn,
+					WALTableProperties.regionObserverMarkerColumn, appTimestamp,
 					WALTableProperties.randomValue);
 			walManagerDistTxnClient.put(dataTable, transactionState, newOrder);
 
@@ -281,7 +281,7 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 				p.add(dataFamily, versionColumn, appTimestamp, Bytes.toBytes(Long
 						.toString(trxId)));
 				p.add(WALTableProperties.WAL_FAMILY,
-						WALTableProperties.regionObserverMarkerColumn,
+						WALTableProperties.regionObserverMarkerColumn, appTimestamp,
 						WALTableProperties.randomValue);
 				walManagerDistTxnClient.put(dataTable, transactionState, p);
 
@@ -318,7 +318,7 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 				orderLineEntry.add(dataFamily, versionColumn, appTimestamp, Bytes
 						.toBytes(Long.toString(trxId)));
 				orderLineEntry.add(WALTableProperties.WAL_FAMILY,
-						WALTableProperties.regionObserverMarkerColumn, WALTableProperties.randomValue);
+						WALTableProperties.regionObserverMarkerColumn, appTimestamp, WALTableProperties.randomValue);
 				walManagerDistTxnClient
 						.put(dataTable, transactionState, orderLineEntry);
 			}

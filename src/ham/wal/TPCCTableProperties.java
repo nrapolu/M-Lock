@@ -45,7 +45,7 @@ public class TPCCTableProperties extends WALTableProperties {
 	int constantItemPrice = 10;
 	int constantDiscount = 10;
 
-	int numItemsPerWarehouse = 100000;
+	int numItemsPerWarehouse = 100;
 	int numCustomersPerDistrict = 3000;
 	
 	public TPCCTableProperties(Configuration conf, HBaseAdmin admin) {
@@ -213,6 +213,7 @@ public class TPCCTableProperties extends WALTableProperties {
 							.toBytes(WALTableProperties.zero));
 			p.add(WAL_FAMILY, versionColumn, appTimestamp, Bytes.toBytes(Long
 					.toString(zero)));
+			p.add(WAL_FAMILY, regionObserverMarkerColumn, appTimestamp, randomValue);
 			p.setWriteToWAL(false);
 			logTable.put(p);
 		}
@@ -236,6 +237,7 @@ public class TPCCTableProperties extends WALTableProperties {
 							.toBytes(WALTableProperties.zero));
 			p.add(WAL_FAMILY, versionColumn, appTimestamp, Bytes.toBytes(Long
 					.toString(zero)));
+			p.add(WAL_FAMILY, regionObserverMarkerColumn, appTimestamp, randomValue);
 			p.setWriteToWAL(false);
 			logTable.put(p);
 		}
@@ -261,6 +263,7 @@ public class TPCCTableProperties extends WALTableProperties {
 								.toBytes(WALTableProperties.zero));
 				p.add(WAL_FAMILY, versionColumn, appTimestamp, Bytes.toBytes(Long
 						.toString(zero)));
+				p.add(WAL_FAMILY, regionObserverMarkerColumn, appTimestamp, randomValue);
 				p.setWriteToWAL(false);
 				logTable.put(p);
 			}
@@ -288,6 +291,7 @@ public class TPCCTableProperties extends WALTableProperties {
 									.toBytes(WALTableProperties.zero));
 					p.add(WAL_FAMILY, versionColumn, appTimestamp, Bytes.toBytes(Long
 							.toString(zero)));
+					p.add(WAL_FAMILY, regionObserverMarkerColumn, appTimestamp, randomValue);
 					p.setWriteToWAL(false);
 					logTable.put(p);
 				}
@@ -315,6 +319,7 @@ public class TPCCTableProperties extends WALTableProperties {
 								.toBytes(WALTableProperties.zero));
 				p.add(WAL_FAMILY, versionColumn, appTimestamp, Bytes.toBytes(Long
 						.toString(zero)));
+				p.add(WAL_FAMILY, regionObserverMarkerColumn, appTimestamp, randomValue);
 				p.setWriteToWAL(false);
 				logTable.put(p);
 			}

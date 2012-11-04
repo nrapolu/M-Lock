@@ -260,6 +260,19 @@ public class EfficientKVSpaceRegionObserver extends BaseRegionObserver {
 				for (byte[] col : columns) {
 					if (Bytes.equals(col, WALTableProperties.regionObserverMarkerColumn)) {
 						processThroughEfficientKVSpace = true;
+						// Deleting the marker from Get object.
+						columns.remove(col);
+						break;
+					} else if (Bytes.equals(col, WALTableProperties.writeLockColumn) || 
+							Bytes.equals(col, WALTableProperties.isLockPlacedOrMigratedColumn)) {
+						processThroughEfficientKVSpace = true;
+						// We don't delete the writeLockColumn -- that is not a marker. We
+						// are using this
+						// hack to send the Get object in the checkAndMutate function
+						// through InMemState.
+						// TODO: Remove this else block completely once we write our own
+						// locking function
+						// which does not rely on checkAndMutate function of HRegion.
 						break;
 					}
 				}
@@ -336,7 +349,7 @@ public class EfficientKVSpaceRegionObserver extends BaseRegionObserver {
 						+ fromRegionResult.toString());
 			}
 		}
-		
+
 		if (kvsFromInMemoryStore != null && !kvsFromInMemoryStore.isEmpty()) {
 			results.addAll(kvsFromInMemoryStore);
 		}
@@ -370,10 +383,12 @@ public class EfficientKVSpaceRegionObserver extends BaseRegionObserver {
 		boolean processThroughEfficientKVSpace = false;
 		for (List<KeyValue> kvs : familyMap.values()) {
 			if (kvs != null) {
-				for (KeyValue kv : kvs) {
+				for (int i = 0; i < kvs.size(); i++) {
+					KeyValue kv = kvs.get(i);
 					if (Bytes.equals(kv.getQualifier(),
 							WALTableProperties.regionObserverMarkerColumn)) {
 						processThroughEfficientKVSpace = true;
+						kvs.remove(i);
 						break;
 					}
 				}
@@ -392,19 +407,20 @@ public class EfficientKVSpaceRegionObserver extends BaseRegionObserver {
 		sysout("Inside PrePut, set for InMemory Processing");
 		inMemState.addPut(put);
 		c.bypass();
-		long now = EnvironmentEdgeManager.currentTimeMillis();
-		HLog log = c.getEnvironment().getRegion().getLog();
-		HTableDescriptor htd = new HTableDescriptor(
-				WALTableProperties.dataTableName);
 
-		for (List<KeyValue> kvs : familyMap.values()) {
-			for (KeyValue kv : kvs) {
-				edit.add(kv);
+		if (writeToWAL) {
+			long now = EnvironmentEdgeManager.currentTimeMillis();
+			HLog log = c.getEnvironment().getRegion().getLog();
+			HTableDescriptor htd = e.getRegion().getTableDesc();
+
+			for (List<KeyValue> kvs : familyMap.values()) {
+				for (KeyValue kv : kvs) {
+					edit.add(kv);
+				}
 			}
-		}
 
-		log.append(c.getEnvironment().getRegion().getRegionInfo(),
-				WALTableProperties.dataTableName, edit, now, htd);
+			log.append(e.getRegion().getRegionInfo(), htd.getName(), edit, now, htd);
+		}
 		sysout("Inside PrePut, done with InMemory Processing");
 	}
 
@@ -422,14 +438,28 @@ public class EfficientKVSpaceRegionObserver extends BaseRegionObserver {
 		Map<byte[], List<KeyValue>> familyMap = delete.getFamilyMap();
 		RegionCoprocessorEnvironment e = c.getEnvironment();
 
+		if (familyMap == null)
+			return;
+
 		// Check for the presence of WALTableProperties.RegionObserverMarkerColumn.
+		// For delete we'll have to delete the KeyValue associated with
+		// regionObserverMarkerColumn.
+		// For some reason, HRegion isn't playing well with deleting columns that
+		// don't exist.
+		// NOTE: Place the regionObserverMarkerColumn for only one family because
+		// the following loop
+		// exits after finding a single instance of the marker.
 		boolean processThroughEfficientKVSpace = false;
 		for (List<KeyValue> kvs : familyMap.values()) {
-			for (KeyValue kv : kvs) {
-				if (Bytes.equals(kv.getQualifier(),
-						WALTableProperties.regionObserverMarkerColumn)) {
-					processThroughEfficientKVSpace = true;
-					break;
+			if (kvs != null) {
+				for (int i = 0; i < kvs.size(); i++) {
+					KeyValue kv = kvs.get(i);
+					if (Bytes.equals(kv.getQualifier(),
+							WALTableProperties.regionObserverMarkerColumn)) {
+						processThroughEfficientKVSpace = true;
+						kvs.remove(i);
+						break;
+					}
 				}
 			}
 			if (processThroughEfficientKVSpace)
@@ -443,21 +473,42 @@ public class EfficientKVSpaceRegionObserver extends BaseRegionObserver {
 			return;
 		}
 
-		inMemState.addDelete(delete);
-		c.bypass();
-		long now = EnvironmentEdgeManager.currentTimeMillis();
-		HLog log = c.getEnvironment().getRegion().getLog();
-		HTableDescriptor htd = new HTableDescriptor(
-				WALTableProperties.dataTableName);
+		sysout("In preDelete, processing this Delete: " + delete.toString()
+				+ " through InMem store");
+		boolean inMemRetVal = inMemState.addDelete(delete);
 
-		for (List<KeyValue> kvs : familyMap.values()) {
-			for (KeyValue kv : kvs) {
-				edit.add(kv);
+		// If addDelete function returns false, it implies that some deleteColumn
+		// commands could not
+		// be processed because there is nothing in the inMem store at those
+		// positions. This means the
+		// client wants to delete data that is present in the region. Thus, we just
+		// pass on this delete
+		// object to the region.
+
+		if (inMemRetVal) {
+			// If all deletes were taken care by the InMemState, then we can bypass
+			// the region and
+			// do our own WAL appends.
+			// BIGNOTE: Even if a few columns couldn't be traced and deleted by the
+			// InMemState, we
+			// are sending the entire delete to the region. Not sure how will region
+			// behave with
+			// deleting columns it does not have in-store.
+			sysout("In preDelete, inMemState returned true, hence bypassing the request to region.");
+			c.bypass();
+			long now = EnvironmentEdgeManager.currentTimeMillis();
+			HLog log = e.getRegion().getLog();
+			HTableDescriptor htd = e.getRegion().getTableDesc();
+
+			for (List<KeyValue> kvs : familyMap.values()) {
+				for (KeyValue kv : kvs) {
+					edit.add(kv);
+				}
 			}
-		}
 
-		log.append(c.getEnvironment().getRegion().getRegionInfo(),
-				WALTableProperties.dataTableName, edit, now, htd);
+			log.append(c.getEnvironment().getRegion().getRegionInfo(), htd.getName(),
+					edit, now, htd);
+		}
 
 		if (beforeDelete) {
 			hadPreDeleted = true;
@@ -559,7 +610,7 @@ public class EfficientKVSpaceRegionObserver extends BaseRegionObserver {
 	public boolean hadDeleted() {
 		return hadPreDeleted && hadPostDeleted;
 	}
-	
+
 	private Result getByMergingResultsWithMyInMemStore(HRegion region, Get get)
 			throws IOException {
 		LOG.debug("REQUEST for GET: " + get.toString());

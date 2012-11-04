@@ -83,7 +83,7 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 	private boolean stopped = false;
 
 	public static void sysout(String otp) {
-		// System.out.println(otp);
+		System.out.println(otp);
 	}
 
 	@Override
@@ -950,7 +950,8 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 					WALTableProperties.appTimestamp, Bytes
 							.toBytes(WALTableProperties.zero));
 			p.add(WALTableProperties.WAL_FAMILY,
-					WALTableProperties.regionObserverMarkerColumn, WALTableProperties.randomValue);
+					WALTableProperties.regionObserverMarkerColumn,
+					WALTableProperties.appTimestamp, WALTableProperties.randomValue);
 			logTable.put(p);
 			logTable.flushCommits();
 
@@ -993,7 +994,8 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 					WALTableProperties.destinationKeyColumn,
 					WALTableProperties.appTimestamp, selfPlacedDestinationKey);
 			p.add(WALTableProperties.WAL_FAMILY,
-					WALTableProperties.regionObserverMarkerColumn, WALTableProperties.randomValue);
+					WALTableProperties.regionObserverMarkerColumn,
+					WALTableProperties.randomValue);
 			if (HRegion.rowIsInRange(region.getRegionInfo(), tableCachedLock)) {
 				migrationResult = region.checkAndMutate(tableCachedLock,
 						WALTableProperties.WAL_FAMILY,

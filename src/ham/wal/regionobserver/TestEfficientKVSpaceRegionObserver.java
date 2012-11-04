@@ -20,9 +20,11 @@ public class TestEfficientKVSpaceRegionObserver {
 	private HTable table = null;
 	private static byte[] testRowKey = Bytes.toBytes("TEST_ROW_KEY");
 	private static byte[] testFamily = Bytes.toBytes("TEST_FAMILY");
-	private static byte[] testColumn = Bytes.toBytes("TEST_COLUMN");
+	private static byte[] testColumnA = Bytes.toBytes("TEST_COLUMN_A");
+	private static byte[] testColumnB = Bytes.toBytes("TEST_COLUMN_B");
 	public static byte[] regionObserverMarkerColumn = WALTableProperties.regionObserverMarkerColumn;
-	public static byte[] testVal = Bytes.toBytes("TEST_VAL");
+	public static byte[] testValA = Bytes.toBytes("TEST_VAL_A");
+	public static byte[] testValB = Bytes.toBytes("TEST_VAL_B");
 	public static long genericTimestamp = WALTableProperties.appTimestamp;
 
 	/**
@@ -48,46 +50,58 @@ public class TestEfficientKVSpaceRegionObserver {
 
 	private void verifyWithGetsAfterDeletes() throws Exception {
 		Get g = new Get(testRowKey);
-		g.addColumn(testFamily, testColumn);
+		g.addColumn(testFamily, testColumnA);
 		g.addColumn(testFamily, regionObserverMarkerColumn);
 		g.setTimeStamp(genericTimestamp);
 		Result r = this.table.get(g);
-		byte[] retrievedVal = r.getValue(testFamily, testColumn);
-		if (retrievedVal == null) {
+		byte[] retrievedValA = r.getValue(testFamily, testColumnA);
+		byte[] retrievedValB = r.getValue(testFamily, testColumnB);
+		if (retrievedValA == null && retrievedValB == null) {
 			System.out.println("Test SUCCESS!");
 		} else {
 			System.out.println("TEST FAILED!!");
-			System.out.println("Retrieved Val: " + Bytes.toString(retrievedVal));
+			System.out.println("Retrieved ValA: " + Bytes.toString(retrievedValA) + ", and " +
+					"retrieved ValB: " + Bytes.toString(retrievedValB));
 		}
 	}
 
 	private void makeDeletes() throws Exception {
 		// TODO Auto-generated method stub
 		Delete d = new Delete(testRowKey);
-		d.deleteColumn(testFamily, testColumn, genericTimestamp);
+		d.deleteColumn(testFamily, testColumnA, genericTimestamp);
+		d.deleteColumn(testFamily, testColumnB, genericTimestamp);
 		d.deleteColumn(testFamily, regionObserverMarkerColumn, genericTimestamp);
 		this.table.delete(d);
 	}
 
 	private void verifyWithGets() throws Exception {
 		Get g = new Get(testRowKey);
-		g.addColumn(testFamily, testColumn);
+		g.addColumn(testFamily, testColumnA);
+		g.addColumn(testFamily, testColumnB);
 		g.addColumn(testFamily, regionObserverMarkerColumn);
 		g.setTimeStamp(genericTimestamp);
 		Result r = this.table.get(g);
-		byte[] retrievedVal = r.getValue(testFamily, testColumn);
-		if (Bytes.equals(retrievedVal, testVal)) {
+		byte[] retrievedValA = r.getValue(testFamily, testColumnA);
+		byte[] retrievedValB = r.getValue(testFamily, testColumnB);
+		if (Bytes.equals(retrievedValA, testValA)
+				&& Bytes.equals(retrievedValB, testValB)) {
 			System.out.println("Test SUCCESS!");
 		} else {
 			System.out.println("TEST FAILED!!");
-			System.out.println("Retrieved Val: " + Bytes.toString(retrievedVal));
+			System.out.println("Retrieved ValA: " + Bytes.toString(retrievedValA)
+					+ ", and retrieved ValB is: " + Bytes.toString(retrievedValB));
 		}
 	}
 
 	private void insertPuts() throws Exception {
 		Put p = new Put(testRowKey);
-		p.add(testFamily, testColumn, genericTimestamp, testVal);
-		// p.add(testFamily, regionObserverMarkerColumn, genericTimestamp, testVal);
+		p.add(testFamily, testColumnA, genericTimestamp, testValA);
+		this.table.put(p);
+		this.table.flushCommits();
+
+		p = new Put(testRowKey);
+		p.add(testFamily, testColumnB, genericTimestamp, testValB);
+		p.add(testFamily, regionObserverMarkerColumn, genericTimestamp, testValA);
 		this.table.put(p);
 		this.table.flushCommits();
 	}

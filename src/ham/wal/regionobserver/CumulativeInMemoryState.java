@@ -346,6 +346,9 @@ public class CumulativeInMemoryState {
 		ConcurrentHashMap<String, ConcurrentHashMap<String, ConcurrentNavigableMap<Long, KeyValue>>> famVal = myInMemStore
 				.get(startRow);
 
+		if(famVal == null)
+			return kvList;
+		
 		Map<byte[], NavigableSet<byte[]>> scanFamMap = scan.getFamilyMap();
 		for (Map.Entry<byte[], NavigableSet<byte[]>> scanFamMapEntry : scanFamMap
 				.entrySet()) {
@@ -357,7 +360,6 @@ public class CumulativeInMemoryState {
 				// static state.
 				continue;
 
-			LOG.debug("Family for which we are scanning from InMemStore: " + famStr);
 			// If the scan had any particular columns mentioned.
 			if (scanFamMapEntry.getValue() != null
 					&& scanFamMapEntry.getValue().size() > 0) {
@@ -381,7 +383,7 @@ public class CumulativeInMemoryState {
 						for (Map.Entry<Long, KeyValue> timestampEntry : descendingMap
 								.entrySet()) {
 							kvList.add(timestampEntry.getValue());
-							LOG.debug("Adding to kvList, timestamp: "
+							sysout("Adding to kvList, timestamp: "
 									+ timestampEntry.getKey() + ", kv: "
 									+ timestampEntry.getValue().toString());
 
@@ -393,7 +395,7 @@ public class CumulativeInMemoryState {
 						// Go with the timestamp range.
 						for (long i = startTimestamp; i < stopTimestamp; i++) {
 							KeyValue kv = timestampVal.get(i);
-							LOG.debug("Adding to kvList, timestamp: " + i + ", kv: "
+							sysout("Adding to kvList, timestamp: " + i + ", kv: "
 									+ kv.toString());
 							kvList.add(kv);
 						}						
@@ -418,7 +420,7 @@ public class CumulativeInMemoryState {
 						for (Map.Entry<Long, KeyValue> timestampEntry : descendingMap
 								.entrySet()) {
 							kvList.add(timestampEntry.getValue());
-							LOG.debug("Adding to kvList, timestamp: "
+							sysout("Adding to kvList, timestamp: "
 									+ timestampEntry.getKey() + ", kv: "
 									+ timestampEntry.getValue().toString());
 
@@ -435,7 +437,7 @@ public class CumulativeInMemoryState {
 								continue;
 							}
 
-							LOG.debug("Adding to kvList, timestamp: " + i + ", kv: "
+							sysout("Adding to kvList, timestamp: " + i + ", kv: "
 									+ kv.toString());
 							kvList.add(kv);
 						}
