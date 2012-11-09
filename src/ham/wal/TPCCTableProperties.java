@@ -45,7 +45,7 @@ public class TPCCTableProperties extends WALTableProperties {
 	int constantItemPrice = 10;
 	int constantDiscount = 10;
 
-	int numItemsPerWarehouse = 100;
+	int numItemsPerWarehouse = 100000;
 	int numCustomersPerDistrict = 3000;
 	
 	public TPCCTableProperties(Configuration conf, HBaseAdmin admin) {
@@ -269,7 +269,9 @@ public class TPCCTableProperties extends WALTableProperties {
 			}
 		}
 
+		// We never need write locks for Customer table.
 		// Populate the Customer table. Each district has 3000 customers.
+		/*
 		for (long i = 1; i <= numWarehouses; i++) {
 			for (long j = 1; j <= 10; j++) {
 				for (long k = 1; k <= numCustomersPerDistrict; k++) {
@@ -297,6 +299,7 @@ public class TPCCTableProperties extends WALTableProperties {
 				}
 			}
 		}
+		*/
 
 		// Populate the Stock table. Each warehouse has 100000 items.
 		for (long i = 1; i <= numItemsPerWarehouse; i++) {

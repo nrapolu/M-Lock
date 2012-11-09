@@ -1504,8 +1504,13 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		List<Get> actions = new LinkedList<Get>();
 		for (Pair<ImmutableBytesWritable, Long> readWithVersion : readVersionList) {
 			ImmutableBytesWritable key = readWithVersion.getFirst();
+			// TODO: Should also fetch write-lock information for this object. Should abort if
+			// we found a lock. Specifically, in our case, we need to fetch isLockPlacedOrMigrated 
+			// column and also isLockMigrated column. If the former is set to 1 and the latter is set
+			// to zero, then the lock is placed.
 			Get g = new Get(key.get());
 			g.addColumn(dataFamily, versionColumn);
+			g.addColumn(WALTableProperties.WAL_FAMILY, WALTableProperties.regionObserverMarkerColumn);
 			actions.add(g);
 		}
 

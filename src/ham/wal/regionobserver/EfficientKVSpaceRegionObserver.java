@@ -5,6 +5,7 @@ import ham.wal.Write;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Arrays;
@@ -81,10 +82,10 @@ public class EfficientKVSpaceRegionObserver extends BaseRegionObserver {
 	boolean hadPreScannerOpen = false;
 	boolean hadPostScannerOpen = false;
 
-	CumulativeInMemoryState inMemState = null;
+	CumulativeInMemoryStateWithSingleMap inMemState = null;
 
 	private void sysout(String line) {
-		System.out.println(line);
+		//System.out.println(line);
 	}
 
 	@Override
@@ -96,7 +97,7 @@ public class EfficientKVSpaceRegionObserver extends BaseRegionObserver {
 	@Override
 	public void preOpen(ObserverContext<RegionCoprocessorEnvironment> c) {
 		hadPreOpen = true;
-		this.inMemState = new CumulativeInMemoryState(c.getEnvironment()
+		this.inMemState = new CumulativeInMemoryStateWithSingleMap(c.getEnvironment()
 				.getRegion().getRegionInfo());
 	}
 
@@ -354,6 +355,11 @@ public class EfficientKVSpaceRegionObserver extends BaseRegionObserver {
 			results.addAll(kvsFromInMemoryStore);
 		}
 
+		Collections.sort(results, KeyValue.COMPARATOR);
+		
+		Result mergedResult = new Result(results);
+		sysout("Merged result: " + mergedResult.toString());
+		
 		// BIGNOTE: The values fetched from the region can be stored in the
 		// InMemoryState. In that case,
 		// we don't need to go back to any region anymore. We need to implement this
@@ -409,6 +415,7 @@ public class EfficientKVSpaceRegionObserver extends BaseRegionObserver {
 		c.bypass();
 
 		if (writeToWAL) {
+			sysout("Writing to WAL!");
 			long now = EnvironmentEdgeManager.currentTimeMillis();
 			HLog log = c.getEnvironment().getRegion().getLog();
 			HTableDescriptor htd = e.getRegion().getTableDesc();
@@ -610,74 +617,73 @@ public class EfficientKVSpaceRegionObserver extends BaseRegionObserver {
 	public boolean hadDeleted() {
 		return hadPreDeleted && hadPostDeleted;
 	}
-
-	private Result getByMergingResultsWithMyInMemStore(HRegion region, Get get)
-			throws IOException {
-		LOG.debug("REQUEST for GET: " + get.toString());
-		Scan scan = new Scan(get);
-
-		Result result = region.get(get, null);
-		List<KeyValue> results = result.list();
-
-		// Create a InMemoryScanner using the results obtained above, but with a
-		// sequenceId
-		// as 0. We then create the InMemoryScanner from the data present in the
-		// InMemoryState,
-		// using a sequenceId as Long.MAX_VALUE. We merge the KeyValues from both
-		// these
-		// scanners using a KeyValueHeap.
-		List<KeyValueScanner> scanners = new ArrayList<KeyValueScanner>();
-		CumulativeInMemoryState.InMemoryStoreScanner scannerWithRegionResults = new CumulativeInMemoryState.InMemoryStoreScanner(
-				scan, results, 0);
-		scanners.add(scannerWithRegionResults);
-		CumulativeInMemoryState.InMemoryStoreScanner scannerWithInMemoryResults = new CumulativeInMemoryState.InMemoryStoreScanner(
-				scan, inMemState);
-		scanners.add(scannerWithInMemoryResults);
-
-		KeyValueHeap heap = new KeyValueHeap(scanners, KeyValue.COMPARATOR);
-		List<KeyValue> mergedResults = new ArrayList<KeyValue>();
-		KeyValue kv = null;
-		KeyValue prevKV = null;
-		while ((kv = heap.next()) != null) {
-			if (KeyValue.Type.codeToType(kv.getType()) == KeyValue.Type.Maximum
-					|| KeyValue.Type.codeToType(kv.getType()) == KeyValue.Type.Minimum) {
-				prevKV = kv;
-				continue;
-			}
-
-			// If two keys are equal, the only difference is the sequenceId. Thus we
-			// take only the
-			// kv from the highest priority scanner and ignore the kv from the other.
-			if (prevKV != null
-					&& KeyValue.KEY_COMPARATOR.compare(kv.getKey(), prevKV.getKey()) == 0) {
-				prevKV = kv;
-				continue;
-			}
-			// If the kv has a "Delete*" tag, then also we don't include it, but we
-			// mark the prevKV as this entry. This is to ensure that the next kv
-			// coming
-			// from the region is not taken in, since the InMemStore overrides the
-			// value
-			// in region, as for deletes. Ofcourse, we are assuming that a
-			// singletimestamp
-			// or the latesttimestamp for a rol:col is being scanned.
-			if (KeyValue.Type.codeToType(kv.getType()) == KeyValue.Type.Delete
-					|| KeyValue.Type.codeToType(kv.getType()) == KeyValue.Type.DeleteColumn
-					|| KeyValue.Type.codeToType(kv.getType()) == KeyValue.Type.DeleteFamily) {
-				prevKV = kv;
-				continue;
-			}
-
-			if (KeyValue.Type.codeToType(prevKV.getType()) == KeyValue.Type.Delete
-					|| KeyValue.Type.codeToType(prevKV.getType()) == KeyValue.Type.DeleteColumn
-					|| KeyValue.Type.codeToType(prevKV.getType()) == KeyValue.Type.DeleteFamily) {
-				prevKV = kv;
-				continue;
-			}
-
-			prevKV = kv;
-			mergedResults.add(kv);
-		}
-		return new Result(mergedResults);
-	}
+//
+//	private Result getByMergingResultsWithMyInMemStore(HRegion region, Get get)
+//			throws IOException {
+//		Scan scan = new Scan(get);
+//
+//		Result result = region.get(get, null);
+//		List<KeyValue> results = result.list();
+//
+//		// Create a InMemoryScanner using the results obtained above, but with a
+//		// sequenceId
+//		// as 0. We then create the InMemoryScanner from the data present in the
+//		// InMemoryState,
+//		// using a sequenceId as Long.MAX_VALUE. We merge the KeyValues from both
+//		// these
+//		// scanners using a KeyValueHeap.
+//		List<KeyValueScanner> scanners = new ArrayList<KeyValueScanner>();
+//		CumulativeInMemoryState.InMemoryStoreScanner scannerWithRegionResults = new CumulativeInMemoryState.InMemoryStoreScanner(
+//				scan, results, 0);
+//		scanners.add(scannerWithRegionResults);
+//		CumulativeInMemoryState.InMemoryStoreScanner scannerWithInMemoryResults = new CumulativeInMemoryState.InMemoryStoreScanner(
+//				scan, inMemState);
+//		scanners.add(scannerWithInMemoryResults);
+//
+//		KeyValueHeap heap = new KeyValueHeap(scanners, KeyValue.COMPARATOR);
+//		List<KeyValue> mergedResults = new ArrayList<KeyValue>();
+//		KeyValue kv = null;
+//		KeyValue prevKV = null;
+//		while ((kv = heap.next()) != null) {
+//			if (KeyValue.Type.codeToType(kv.getType()) == KeyValue.Type.Maximum
+//					|| KeyValue.Type.codeToType(kv.getType()) == KeyValue.Type.Minimum) {
+//				prevKV = kv;
+//				continue;
+//			}
+//
+//			// If two keys are equal, the only difference is the sequenceId. Thus we
+//			// take only the
+//			// kv from the highest priority scanner and ignore the kv from the other.
+//			if (prevKV != null
+//					&& KeyValue.KEY_COMPARATOR.compare(kv.getKey(), prevKV.getKey()) == 0) {
+//				prevKV = kv;
+//				continue;
+//			}
+//			// If the kv has a "Delete*" tag, then also we don't include it, but we
+//			// mark the prevKV as this entry. This is to ensure that the next kv
+//			// coming
+//			// from the region is not taken in, since the InMemStore overrides the
+//			// value
+//			// in region, as for deletes. Ofcourse, we are assuming that a
+//			// singletimestamp
+//			// or the latesttimestamp for a rol:col is being scanned.
+//			if (KeyValue.Type.codeToType(kv.getType()) == KeyValue.Type.Delete
+//					|| KeyValue.Type.codeToType(kv.getType()) == KeyValue.Type.DeleteColumn
+//					|| KeyValue.Type.codeToType(kv.getType()) == KeyValue.Type.DeleteFamily) {
+//				prevKV = kv;
+//				continue;
+//			}
+//
+//			if (KeyValue.Type.codeToType(prevKV.getType()) == KeyValue.Type.Delete
+//					|| KeyValue.Type.codeToType(prevKV.getType()) == KeyValue.Type.DeleteColumn
+//					|| KeyValue.Type.codeToType(prevKV.getType()) == KeyValue.Type.DeleteFamily) {
+//				prevKV = kv;
+//				continue;
+//			}
+//
+//			prevKV = kv;
+//			mergedResults.add(kv);
+//		}
+//		return new Result(mergedResults);
+//	}
 }

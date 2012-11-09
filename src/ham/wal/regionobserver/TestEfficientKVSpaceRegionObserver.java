@@ -96,12 +96,14 @@ public class TestEfficientKVSpaceRegionObserver {
 	private void insertPuts() throws Exception {
 		Put p = new Put(testRowKey);
 		p.add(testFamily, testColumnA, genericTimestamp, testValA);
+		//p.setWriteToWAL(false);
 		this.table.put(p);
 		this.table.flushCommits();
 
 		p = new Put(testRowKey);
 		p.add(testFamily, testColumnB, genericTimestamp, testValB);
 		p.add(testFamily, regionObserverMarkerColumn, genericTimestamp, testValA);
+		//p.setWriteToWAL(false);
 		this.table.put(p);
 		this.table.flushCommits();
 	}

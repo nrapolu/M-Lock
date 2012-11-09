@@ -8,6 +8,7 @@ import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableSet;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.Callable;
@@ -68,7 +69,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 	// new DaemonThreadFactory());
 
 	public static void sysout(String otp) {
-		System.out.println(otp);
+		//System.out.println(otp);
 	}
 
 	@Override
@@ -391,7 +392,8 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 							WALTableProperties.isLockPlacedOrMigratedColumn, appTimestamp,
 							Bytes.toBytes(WALTableProperties.one));
 					p.add(WALTableProperties.WAL_FAMILY,
-							WALTableProperties.regionObserverMarkerColumn, WALTableProperties.randomValue);
+							WALTableProperties.regionObserverMarkerColumn,
+							WALTableProperties.randomValue);
 					toBePersistedPut = p;
 
 					if (HRegion.rowIsInRange(region.getRegionInfo(), indirectionKey)) {
@@ -905,8 +907,9 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 			final LogId logId = logs.get(logIndex);
 			// If the logId does not belong to this region, we just skip.
 			if (!HRegion.rowIsInRange(region.getRegionInfo(), logId.getKey())) {
-				System.err.println("ROW NOT IN REGION: logId: " + Bytes.toString(logId.getKey())
-						+ ", region info: " + region.getRegionInfo().toString());
+				System.err.println("ROW NOT IN REGION: logId: "
+						+ Bytes.toString(logId.getKey()) + ", region info: "
+						+ region.getRegionInfo().toString());
 				returnValList.set(logIndex, new LinkedList<ImmutableBytesWritable>());
 				continue;
 			}
@@ -1359,20 +1362,25 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 				// case,
 				// put.getFamilyMap() would be the starting point for iteration.
 				if (!put.isEmpty()) {
-					for (KeyValue kv : put.getFamilyMap().get(dataFamily)) {
-						byte[] itemName = Bytes.toBytes(Bytes
-								.toString(WALTableProperties.dataTableName)
-								+ Write.nameDelimiter
-								+ Bytes.toString(WALTableProperties.dataFamily)
-								+ Write.nameDelimiter + Bytes.toString(kv.getQualifier()));
+					for (Map.Entry<byte[], List<KeyValue>> familyMap : put.getFamilyMap()
+							.entrySet()) {
+						byte[] family = familyMap.getKey();
+						List<KeyValue> kvs = familyMap.getValue();
+						for (KeyValue kv : kvs) {
+							byte[] itemName = Bytes.toBytes(Bytes
+									.toString(WALTableProperties.dataTableName)
+									+ Write.nameDelimiter
+									+ Bytes.toString(family)
+									+ Write.nameDelimiter + Bytes.toString(kv.getQualifier()));
 
-						Write valueWriteToOrigKey = new Write();
-						valueWriteToOrigKey.setName(itemName);
-						valueWriteToOrigKey.setKey(put.getRow());
-						valueWriteToOrigKey.setValue(kv.getValue());
-						finalWrites.add(valueWriteToOrigKey);
-						sysout("Final to-be-committed Write using data from " + "store: "
-								+ valueWriteToOrigKey.toString());
+							Write valueWriteToOrigKey = new Write();
+							valueWriteToOrigKey.setName(itemName);
+							valueWriteToOrigKey.setKey(put.getRow());
+							valueWriteToOrigKey.setValue(kv.getValue());
+							finalWrites.add(valueWriteToOrigKey);
+							sysout("Final to-be-committed Write using data from " + "store: "
+									+ valueWriteToOrigKey.toString());
+						}
 					}
 				}
 			}
@@ -1567,6 +1575,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 		// Get the coprocessor environment
 		RegionCoprocessorEnvironment env = (RegionCoprocessorEnvironment) getEnvironment();
 		HRegion region = env.getRegion();
+		HTableDescriptor htd = region.getTableDesc();
 
 		List<List<Result>> results = new LinkedList<List<Result>>();
 		for (int j = 0; j < logs.size(); j++) {
@@ -1595,24 +1604,27 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 				}
 
 				Result resultFromRegion = region.get(g, null);
-
-				List<KeyValue> kvs = new ArrayList<KeyValue>();
-				for (byte[] column : g.getFamilyMap().get(dataFamily)) {
-					byte[] dataName = Bytes.toBytes(Bytes
-							.toString(WALTableProperties.dataTableName)
-							+ Write.nameDelimiter
-							+ Bytes.toString(WALTableProperties.dataFamily)
-							+ Write.nameDelimiter + Bytes.toString(column));
-					Write dataWriteFromSnapshot = snapshotWriteMap.get(Write
-							.getNameAndKey(dataName, g.getRow()));
-					if (dataWriteFromSnapshot != null) {
-						KeyValue kv = new KeyValue(g.getRow(), dataFamily, column,
-								dataWriteFromSnapshot.getValue());
-						kvs.add(kv);
-					} else {
-						// Since its not found in the snapshot, we take it from store's
-						// result.
-						kvs.addAll(resultFromRegion.getColumn(dataFamily, column));
+				
+				List<KeyValue> kvs = new LinkedList<KeyValue>();
+				for (Map.Entry<byte[], NavigableSet<byte[]>> famMapEntry : g
+						.getFamilyMap().entrySet()) {
+					byte[] family = famMapEntry.getKey();
+					for (byte[] column : famMapEntry.getValue()) {
+						byte[] dataName = Bytes.toBytes(Bytes.toString(htd.getName())
+								+ Write.nameDelimiter + Bytes.toString(family)
+								+ Write.nameDelimiter + Bytes.toString(column));
+						Write dataWriteFromSnapshot = snapshotWriteMap.get(Write
+								.getNameAndKey(dataName, g.getRow()));
+						if (dataWriteFromSnapshot != null) {
+							KeyValue kv = new KeyValue(g.getRow(), family, column,
+									dataWriteFromSnapshot.getValue());
+							kvs.add(kv);
+						} else {
+							// Since its not found in the snapshot, we take it from store's
+							// result.
+							List<KeyValue> kvsFromRegionResult = resultFromRegion.getColumn(family, column);
+							kvs.addAll(kvsFromRegionResult);
+						}
 					}
 				}
 				// Push the kvs for this Get into the resultKvs. This Get request
@@ -1631,7 +1643,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 				if (kvs == null || kvs.isEmpty())
 					sysout("Empty kvs for row: " + getsForThisLog.get(j).toString());
 				Result finalResult = new Result(kvs);
-				sysout("Adding result for this log: " + finalResult.toString());
+				sysout("Adding result after server-side merge : " + finalResult.toString());
 				resultsForThisLog.add(finalResult);
 			}
 		}

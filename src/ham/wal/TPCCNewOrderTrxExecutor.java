@@ -51,7 +51,7 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 	}
 
 	public static void sysout(long trxId, String otp) {
-		// System.out.println(trxId + " : " + otp);
+		//System.out.println(trxId + " : " + otp);
 	}
 
 	public static Map<String, List<String>> getLogsToDataKeysMap(String[] keys) {
@@ -285,7 +285,12 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 						WALTableProperties.randomValue);
 				walManagerDistTxnClient.put(dataTable, transactionState, p);
 
+				// BIG NOTE: We disable insertion of order-line entries. They don't serve any
+				// purpose other than increasing the size of tables and increasing latency of
+				// lock migration. Infact, one single lock for the order microshard is enough
+				// to provide isolation for all of the order line entries.
 				// Create a Put to update the orderline entry for this item.
+				/*
 				String newOrderLineKey = orderWALPrefix
 						+ Bytes.toString(homeWarehouseId) + ":"
 						+ Bytes.toString(districtId) + ":"
@@ -295,7 +300,6 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 						+ Bytes.toString(districtId) + ":"
 						+ Long.toString(districtNextOrderId) + ":" + itemKey + ":"
 						+ "orderLine";
-
 				Put orderLineEntry = new Put(Bytes.toBytes(newOrderLineKey));
 				orderLineEntry.add(dataFamily, orderLineOrderIdColumn, appTimestamp,
 						Bytes.toBytes(Long.toString(districtNextOrderId)));
@@ -321,6 +325,7 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 						WALTableProperties.regionObserverMarkerColumn, appTimestamp, WALTableProperties.randomValue);
 				walManagerDistTxnClient
 						.put(dataTable, transactionState, orderLineEntry);
+				*/			
 			}
 			// Transaction commits happens in 3 phases:
 			// 1. Place shadow puts in the store (remember to have different

@@ -45,7 +45,7 @@ public class CumulativeInMemoryState {
 	private List<Delete> deletes = new LinkedList<Delete>();
 
 	private void sysout(String line) {
-		System.out.println(line);
+		//System.out.println(line);
 	}
 	
 	public CumulativeInMemoryState(HRegionInfo regionInfo) {
@@ -433,7 +433,7 @@ public class CumulativeInMemoryState {
 						for (long i = startTimestamp; i < stopTimestamp; i++) {
 							KeyValue kv = timestampVal.get(i);
 							if (kv == null) {
-								LOG.debug("No kv for timestamp: " + i);
+								sysout("No kv for timestamp: " + i);
 								continue;
 							}
 
@@ -479,9 +479,6 @@ public class CumulativeInMemoryState {
 					// static state.
 					continue;
 
-				LOG
-						.debug("Family for which we are scanning from InMemStore: "
-								+ famStr);
 				// If the scan had any particular columns mentioned.
 				if (scanFamMapEntry.getValue() != null
 						&& scanFamMapEntry.getValue().size() > 0) {
@@ -506,7 +503,7 @@ public class CumulativeInMemoryState {
 							for (Map.Entry<Long, KeyValue> timestampEntry : descendingMap
 									.entrySet()) {
 								kvList.add(timestampEntry.getValue());
-								LOG.debug("Adding to kvList, timestamp: "
+								sysout("Adding to kvList, timestamp: "
 										+ timestampEntry.getKey() + ", kv: "
 										+ timestampEntry.getValue().toString());
 
@@ -518,7 +515,7 @@ public class CumulativeInMemoryState {
 							// Go with the timestamp range.
 							for (long i = startTimestamp; i < stopTimestamp; i++) {
 								KeyValue kv = timestampVal.get(i);
-								LOG.debug("Adding to kvList, timestamp: " + i + ", kv: "
+								sysout("Adding to kvList, timestamp: " + i + ", kv: "
 										+ kv.toString());
 								kvList.add(kv);
 							}
@@ -543,7 +540,7 @@ public class CumulativeInMemoryState {
 							for (Map.Entry<Long, KeyValue> timestampEntry : descendingMap
 									.entrySet()) {
 								kvList.add(timestampEntry.getValue());
-								LOG.debug("Adding to kvList, timestamp: "
+								sysout("Adding to kvList, timestamp: "
 										+ timestampEntry.getKey() + ", kv: "
 										+ timestampEntry.getValue().toString());
 
@@ -556,11 +553,11 @@ public class CumulativeInMemoryState {
 							for (long i = startTimestamp; i < stopTimestamp; i++) {
 								KeyValue kv = timestampVal.get(i);
 								if (kv == null) {
-									LOG.debug("No kv for timestamp: " + i);
+									sysout("No kv for timestamp: " + i);
 									continue;
 								}
 
-								LOG.debug("Adding to kvList, timestamp: " + i + ", kv: "
+								sysout("Adding to kvList, timestamp: " + i + ", kv: "
 										+ kv.toString());
 								kvList.add(kv);
 							}
@@ -657,7 +654,6 @@ public class CumulativeInMemoryState {
 				ScanQueryMatcher.MatchCode qcode = matcher.match(kv);
 				switch (qcode) {
 				case INCLUDE:
-					LOG.debug("Including a KV from InMemoryStoreScanner!");
 					KeyValue next = this.next();
 					results.add(next);
 					if (limit > 0 && results.size() == limit) {

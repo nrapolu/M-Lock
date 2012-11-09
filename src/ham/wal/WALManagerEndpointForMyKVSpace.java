@@ -83,7 +83,7 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 	private boolean stopped = false;
 
 	public static void sysout(String otp) {
-		System.out.println(otp);
+		//System.out.println(otp);
 	}
 
 	@Override
@@ -178,7 +178,6 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 			TreeMap<Long, byte[]> currentTimestampMap = myKVSpace.get(currentKey);
 
 			if (syncTimestampMap == null || currentTimestampMap == null) {
-				sysout("Result is empty");
 				// Add a new WAL to the table with the given id.
 				syncTimestampMap = new TreeMap<Long, byte[]>();
 				syncTimestampMap.put(WALTableProperties.GENERIC_TIMESTAMP, Bytes
@@ -222,7 +221,6 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 			if (currentTs == syncTs) {
 				Map<String, Write> writeMap = new HashMap<String, Write>();
 				snapshot.setTimestamp(currentTs);
-				sysout("Setting timestamp for snapshot: " + currentTs);
 				snapshot.setWriteMap(writeMap);
 				return snapshot;
 			}
@@ -699,6 +697,8 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 		log.append(region.getRegionInfo(), WALTableProperties.dataTableName,
 				walEdit, now, htd);
 
+		Map<byte[], Put> putMap = new TreeMap<byte[], Put>(Bytes.BYTES_COMPARATOR);
+		
 		for (Write w : logEntry.getWrites()) {
 			String writeName = Bytes.toString(w.getName());
 			String[] tokens = writeName.split("[" + Write.nameDelimiter + "]+");
@@ -708,9 +708,17 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 			byte[] key = w.getKey();
 			byte[] value = w.getValue();
 
-			Put p = new Put(key);
+			Put p = putMap.get(key);
+			if (p == null) {
+				p = new Put(key);
+				putMap.put(key, p);
+			}
 			p.setWriteToWAL(false);
 			p.add(family, qualifier, WALTableProperties.appTimestamp, value);
+		}
+		
+		// Flush the puts in putMap onto the region.
+		for (Put p: putMap.values()) {
 			region.put(p, false);
 		}
 	}
