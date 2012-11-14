@@ -125,6 +125,14 @@ public class DistTxnState {
 		this.distTxnMetadata.addReadInfo(key, version);
 	}
 
+	public void addToReadCache(ImmutableBytesWritable key, Result r) {
+		readCache.put(key, r);
+	}
+	
+	public boolean isPresentInReadSet(ImmutableBytesWritable key) {
+		return (this.readCache.get(key) != null);
+	}
+	
 	public void addWriteInfoToDistTxnMetadata(Put put) {
 		// Create a shadow object using the key of the put object. Shadow object
 		// should

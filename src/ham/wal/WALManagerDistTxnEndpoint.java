@@ -69,7 +69,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 	// new DaemonThreadFactory());
 
 	public static void sysout(String otp) {
-		//System.out.println(otp);
+		// System.out.println(otp);
 	}
 
 	@Override
@@ -320,6 +320,12 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 		long otherTrxId = 0;
 		byte[] destinationKey = null;
 		long flag = 0;
+		List<WALEdit> accumulatedWALEdits = new ArrayList<WALEdit>();
+		long now = EnvironmentEdgeManager.currentTimeMillis();
+		HLog log = region.getLog();
+		HTableDescriptor htd = new HTableDescriptor(
+				WALTableProperties.dataTableName);
+
 		for (int i = 0; i < keys.size(); i++) {
 			boolean isMigrated = isKeyMigrated.get(i);
 			ImmutableBytesWritable origKey = keys.get(i);
@@ -374,10 +380,6 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 				// we've read them, as no one else can modify the row's content.
 				boolean nextLockIsUnderTheSameWAL = false;
 				WALEdit walEdit = new WALEdit();
-				long now = EnvironmentEdgeManager.currentTimeMillis();
-				HLog log = region.getLog();
-				HTableDescriptor htd = new HTableDescriptor(
-						WALTableProperties.dataTableName);
 
 				do {
 					sysout("Acquiring lock for key: " + Bytes.toString(indirectionKey));
@@ -584,9 +586,47 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 							i++;
 						} else {
 							nextLockIsUnderTheSameWAL = false;
-							// Persist the WALEdit information.
-							log.append(region.getRegionInfo(),
-									WALTableProperties.dataTableName, walEdit, now, htd);
+							// Check if nextLogId is a migrated log -- i.e, key's original log
+							// id is not
+							// the same as nextLogId.
+							// If it is, then we don't do a log append right now. We just
+							// accumulate the walEdit.
+							// Before returning we do an append.
+							ImmutableBytesWritable nextKey = null;
+							LogId origLogIdForNextKey = null;
+							if (i + 1 < keys.size()) {
+								nextKey = keys.get(i + 1);
+								origLogIdForNextKey = WALTableProperties.getLogIdForKey(nextKey
+										.get());
+							}
+
+							if (origLogIdForNextKey != null
+									&& origLogIdForNextKey != nextLogId) {
+								// we just stack all the WALEdits and append them to log before
+								// leaving.
+								// TODO: Even though we are postponing the log append, we are
+								// releasing the
+								// high-level WAL lock. Ideally, this should not be done because
+								// some other
+								// transactin could see the WAL-effects before they are
+								// committed to log.
+								// However, this won't affect the write-locks on lock-partitions
+								// because the max
+								// any other transaction would do is back-off as it observed a
+								// lock and possibly
+								// abort. Neither of those actions are harmful.
+								sysout("Delaying wal append for next key: "
+										+ Bytes.toString(nextKey.get()) + ", origLog: "
+										+ origLogIdForNextKey.toString() + ", nextLogId: "
+										+ nextLogId.toString());
+								accumulatedWALEdits.add(walEdit);
+							} else {
+								// We are operating on the original logs which have boundaries
+								// across WALs.
+								// Persist the WALEdit information.
+								log.append(region.getRegionInfo(),
+										WALTableProperties.dataTableName, walEdit, now, htd);
+							}
 						}
 					}
 				} while (isLockPlaced && nextLockIsUnderTheSameWAL);
@@ -606,6 +646,17 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 
 			if (!isLockPlaced)
 				break;
+		}
+
+		// Before leaving commit the accumulatedWALEdits if they are any.
+		if (!accumulatedWALEdits.isEmpty()) {
+			WALEdit combinedWALEdit = new WALEdit();
+			for (WALEdit walEdit : accumulatedWALEdits) {
+				for (KeyValue kv : walEdit.getKeyValues())
+					combinedWALEdit.add(kv);
+			}
+			log.append(region.getRegionInfo(), WALTableProperties.dataTableName,
+					combinedWALEdit, now, htd);
 		}
 
 		List<ImmutableBytesWritable> returnVals = new ArrayList<ImmutableBytesWritable>();
@@ -907,9 +958,9 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 			final LogId logId = logs.get(logIndex);
 			// If the logId does not belong to this region, we just skip.
 			if (!HRegion.rowIsInRange(region.getRegionInfo(), logId.getKey())) {
-				System.err.println("ROW NOT IN REGION: logId: "
-						+ Bytes.toString(logId.getKey()) + ", region info: "
-						+ region.getRegionInfo().toString());
+				// System.err.println("ROW NOT IN REGION: logId: "
+				// + Bytes.toString(logId.getKey()) + ", region info: "
+				// + region.getRegionInfo().toString());
 				returnValList.set(logIndex, new LinkedList<ImmutableBytesWritable>());
 				continue;
 			}
@@ -1604,7 +1655,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 				}
 
 				Result resultFromRegion = region.get(g, null);
-				
+
 				List<KeyValue> kvs = new LinkedList<KeyValue>();
 				for (Map.Entry<byte[], NavigableSet<byte[]>> famMapEntry : g
 						.getFamilyMap().entrySet()) {
@@ -1622,7 +1673,8 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 						} else {
 							// Since its not found in the snapshot, we take it from store's
 							// result.
-							List<KeyValue> kvsFromRegionResult = resultFromRegion.getColumn(family, column);
+							List<KeyValue> kvsFromRegionResult = resultFromRegion.getColumn(
+									family, column);
 							kvs.addAll(kvsFromRegionResult);
 						}
 					}
@@ -1643,7 +1695,8 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 				if (kvs == null || kvs.isEmpty())
 					sysout("Empty kvs for row: " + getsForThisLog.get(j).toString());
 				Result finalResult = new Result(kvs);
-				sysout("Adding result after server-side merge : " + finalResult.toString());
+				sysout("Adding result after server-side merge : "
+						+ finalResult.toString());
 				resultsForThisLog.add(finalResult);
 			}
 		}

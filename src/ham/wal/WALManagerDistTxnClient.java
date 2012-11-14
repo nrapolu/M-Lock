@@ -55,7 +55,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 	}
 
 	public static void sysout(long trxId, String otp) {
-		System.out.println(trxId + " : " + otp);
+		//System.out.println(trxId + " : " + otp);
 	}
 
 	public DistTxnState beginTransaction() throws IOException {
@@ -689,8 +689,9 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 				sysout(trxId, "Exception for row: " + Bytes.toString(r.getRow()));
 				e.printStackTrace();
 			}
-			transactionState.addReadInfoToDistTxnMetadata(new ImmutableBytesWritable(
-					r.getRow()), version);
+			ImmutableBytesWritable key = new ImmutableBytesWritable(r.getRow());
+			transactionState.addToReadCache(key, r);
+			transactionState.addReadInfoToDistTxnMetadata(key, version);
 		}
 		return finalResults;
 	}
@@ -1323,6 +1324,13 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 				// For now, we don't do roll-forwarding, we just retry acquiring the
 				// lock either at the
 				// same key or at the destination key.
+				// If flag is 1 -- i.e, someone has the lock -- we have to abort if that key is in our
+				// readSet. This is because, if someone has the write-lock, then they are going to update it.
+				// In that case, we'll anyway abort in the checkReadVersions function after
+				// obtaining this lock. To avoid all the other work, we just abort right now.
+				if (flag == 1) 
+					break;
+				
 				// If flag is 3, then it means the detour was deleted, which means we
 				// have to
 				// go back.
@@ -1369,6 +1377,11 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 
 		transactionState.setNbDetoursEncountered(nbDetoursEncountered);
 		transactionState.setNbNetworkHopsInTotal(nbNetworkHopsInTotal);
+		if (!allLocked) {
+			// we need to abort if we haven't got all our locks and are exiting this function.
+			return false;
+		}
+		
 		return true;
 	}
 

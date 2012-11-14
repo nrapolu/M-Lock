@@ -365,6 +365,14 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 					.commitRequestAcquireLocksViaIndirection(logTable, transactionState,
 							migrateLocks);
 			long endLockingTime = System.currentTimeMillis();
+			if (!acquireLocksResponse) {
+				// We abort here.
+				countOfAborts++;
+				walManagerDistTxnClient.abortWithoutShadows(logTable, transactionState);
+				return new DistTrxExecutorReturnVal(tokens, countOfAborts,
+						tokens.length);
+			}
+			
 			long nbDetoursEncountered = transactionState.getNbDetoursEncountered();
 			long nbNetworkHopsInTotal = transactionState.getNbNetworkHopsInTotal();
 			long lockMigrationTime = transactionState.getLockMigrationTime();
