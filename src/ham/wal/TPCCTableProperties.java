@@ -45,7 +45,7 @@ public class TPCCTableProperties extends WALTableProperties {
 	int constantItemPrice = 10;
 	int constantDiscount = 10;
 
-	int numItemsPerWarehouse = 100;
+	int numItemsPerWarehouse = 100000;
 	int numCustomersPerDistrict = 3000;
 	
 	public TPCCTableProperties(Configuration conf, HBaseAdmin admin) {

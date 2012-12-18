@@ -69,7 +69,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 	// new DaemonThreadFactory());
 
 	public static void sysout(String otp) {
-		 System.out.println(otp);
+		 //System.out.println(otp);
 	}
 
 	@Override

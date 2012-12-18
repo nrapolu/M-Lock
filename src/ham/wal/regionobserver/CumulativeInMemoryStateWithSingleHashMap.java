@@ -40,7 +40,7 @@ public class CumulativeInMemoryStateWithSingleHashMap {
 	private List<Delete> deletes = new LinkedList<Delete>();
 
 	private void sysout(String line) {
-		System.out.println(line);
+		//System.out.println(line);
 	}
 
 	public CumulativeInMemoryStateWithSingleHashMap(HRegionInfo regionInfo) {
