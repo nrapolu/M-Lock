@@ -60,7 +60,7 @@ public class LogId implements Writable {
 	@Override
 	public String toString() {
 		return "LogId [key=" + Bytes.toString(key) + ", name="
-				+ Bytes.toString(name) + "]";
+				+ Bytes.toString(name) + ", commitType=" + commitType + "]";
 	}
 	@Override
 	public void readFields(DataInput in) throws IOException {
@@ -99,6 +99,21 @@ public class LogId implements Writable {
 		if (!Bytes.equals(name, other.name))
 			return false;
 		if (commitType != other.commitType)
+			return false;
+		return true;
+	}
+	
+	public boolean equalsWithoutCheckingCommitType(Object obj) {
+		if (this == obj)
+			return true;
+		if (obj == null)
+			return false;
+		if (getClass() != obj.getClass())
+			return false;
+		LogId other = (LogId) obj;
+		if (!Bytes.equals(key, other.key))
+			return false;
+		if (!Bytes.equals(name, other.name))
 			return false;
 		return true;
 	}

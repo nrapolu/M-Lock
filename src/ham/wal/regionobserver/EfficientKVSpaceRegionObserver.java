@@ -82,7 +82,7 @@ public class EfficientKVSpaceRegionObserver extends BaseRegionObserver {
 	boolean hadPreScannerOpen = false;
 	boolean hadPostScannerOpen = false;
 
-	CumulativeInMemoryStateWithSingleMap inMemState = null;
+	CumulativeInMemoryStateWithSingleHashMap inMemState = null;
 
 	private void sysout(String line) {
 		//System.out.println(line);
@@ -97,7 +97,7 @@ public class EfficientKVSpaceRegionObserver extends BaseRegionObserver {
 	@Override
 	public void preOpen(ObserverContext<RegionCoprocessorEnvironment> c) {
 		hadPreOpen = true;
-		this.inMemState = new CumulativeInMemoryStateWithSingleMap(c.getEnvironment()
+		this.inMemState = new CumulativeInMemoryStateWithSingleHashMap(c.getEnvironment()
 				.getRegion().getRegionInfo());
 	}
 

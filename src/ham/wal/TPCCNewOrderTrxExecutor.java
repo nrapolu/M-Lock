@@ -211,8 +211,18 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 			walManagerDistTxnClient.put(dataTable, transactionState,
 					updatedDistrictNextOrderId);
 
+			// Generating salt by inverting the digits of homeWarehouseId. If it is
+			// 19, we make
+			// it 91.
+			String homeWarehouseStr = Bytes.toString(homeWarehouseId);
+			String inverseWarehouseStr = "";
+			for (int i = 0; i < homeWarehouseStr.length(); i++) {
+				inverseWarehouseStr = homeWarehouseStr.substring(i, i + 1)
+						+ inverseWarehouseStr;
+			}
+			
 			// Create a Put to enter info into the Order table.
-			String orderKey = orderWALPrefix + Bytes.toString(homeWarehouseId) + ":"
+			String orderKey = inverseWarehouseStr + ":"
 					+ Bytes.toString(districtId) + ":"
 					+ Long.toString(districtNextOrderId) + ":" + "order"
 					+ WALTableProperties.logAndKeySeparator
@@ -231,8 +241,12 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 					.toBytes("" + 1));
 			order.add(dataFamily, versionColumn, appTimestamp, Bytes.toBytes(Long
 					.toString(trxId)));
+			order.add(WALTableProperties.WAL_FAMILY,
+					WALTableProperties.regionObserverMarkerColumn, appTimestamp,
+					WALTableProperties.randomValue);
 			walManagerDistTxnClient.put(dataTable, transactionState, order);
 
+			/*
 			// Create a Put to add info into the NewOrder table.
 			String newOrderKey = orderWALPrefix + Bytes.toString(homeWarehouseId)
 					+ ":" + Bytes.toString(districtId) + ":"
@@ -253,6 +267,7 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 					WALTableProperties.regionObserverMarkerColumn, appTimestamp,
 					WALTableProperties.randomValue);
 			walManagerDistTxnClient.put(dataTable, transactionState, newOrder);
+			*/
 
 			for (int i = 2; i < results.size(); i = i + 2) {
 				long orderLineAmount;
@@ -342,15 +357,6 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 			// We measure time and attempts for each.
 			long startPutShadowTime = System.currentTimeMillis();
 			// System.out.println("MigrateLocks request status: " + migrateLocks);
-			// Generating salt by inverting the digits of homeWarehouseId. If it is
-			// 19, we make
-			// it 91.
-			String homeWarehouseStr = Bytes.toString(homeWarehouseId);
-			String inverseWarehouseStr = "";
-			for (int i = 0; i < homeWarehouseStr.length(); i++) {
-				inverseWarehouseStr = homeWarehouseStr.substring(i, i + 1)
-						+ inverseWarehouseStr;
-			}
 			walManagerDistTxnClient.putShadowObjects(logTable, dataTable,
 					transactionState, migrateLocks, inverseWarehouseStr);
 			long endPutShadowTime = System.currentTimeMillis();

@@ -69,7 +69,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 	// new DaemonThreadFactory());
 
 	public static void sysout(String otp) {
-		// System.out.println(otp);
+		 System.out.println(otp);
 	}
 
 	@Override
@@ -310,7 +310,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 	@Override
 	public List<ImmutableBytesWritable> commitRequestAcquireLocksViaIndirection(
 			Long transactionId, List<LogId> logs, List<ImmutableBytesWritable> keys,
-			List<Boolean> isKeyMigrated) throws IOException {
+			List<Boolean> isLockAtMigratedLocation) throws IOException {
 		long zero = WALTableProperties.zero;
 
 		// Get the coprocessor environment
@@ -327,7 +327,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 				WALTableProperties.dataTableName);
 
 		for (int i = 0; i < keys.size(); i++) {
-			boolean isMigrated = isKeyMigrated.get(i);
+			boolean atMigratedLocation = isLockAtMigratedLocation.get(i);
 			ImmutableBytesWritable origKey = keys.get(i);
 			LogId logId = logs.get(i);
 			byte[] indirectionKey = Bytes.toBytes(Bytes.toString(logId.getKey())
@@ -379,6 +379,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 				// after
 				// we've read them, as no one else can modify the row's content.
 				boolean nextLockIsUnderTheSameWAL = false;
+				// Stores all the edits under one single WAL.
 				WALEdit walEdit = new WALEdit();
 
 				do {
@@ -402,7 +403,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 						isLockPlaced = region.checkAndMutate(indirectionKey,
 								WALTableProperties.WAL_FAMILY, writeLockColumn,
 								CompareFilter.CompareOp.EQUAL, new BinaryComparator(Bytes
-										.toBytes(zero)), p, null, true);
+										.toBytes(zero)), p, null, false);
 
 						// A lock can't be placed due to either of three cases (The flag
 						// indicates the case number):
@@ -467,69 +468,57 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 								}
 							} else {
 								sysout("Checking for migration options. If its not migrated, we'll create the lock");
-								// Finding a deleted key is only possible in one case:
-								// We are at the lock's destination place but couldn't find a
+								// Finding a deleted key is only possible in two cases:
+								// 1. We are at the lock's destination place but couldn't find a
 								// lock entry,
 								// implying that the entry was deleted by the migrator. In this
 								// case,
-								// we just return with flag=3, to retry at the source.
-								flag = 3;
+								// we just return with flag=3, to retry at the source. We can
+								// detect this by
+								// comparing the logId at which we are locking with the original
+								// LogId of the
+								// key. If they are different, we are at the
+								// lock-table-partition.
+								// 2. We are at the home position of the lock. We can't find a
+								// lock as there
+								// was no lock ever created, for example, locks for the order
+								// table rows have
+								// to be created on-fly. In this case, we create the lock and
+								// acquire it.
+								if (atMigratedLocation) {
+									// This shows that the detour lock was deleted.
+									flag = 3;
+								} else {
+									sysout("Creating a new lock and pre-locking it.");
+									Put createLock = new Put(indirectionKey);
+									createLock.setWriteToWAL(false);
+									createLock.add(WALTableProperties.WAL_FAMILY,
+											writeLockColumn, appTimestamp, Bytes
+													.toBytes(transactionId));
+									createLock.add(WALTableProperties.WAL_FAMILY,
+											WALTableProperties.isLockPlacedOrMigratedColumn,
+											appTimestamp, Bytes.toBytes(WALTableProperties.one));
+									createLock.add(WALTableProperties.WAL_FAMILY,
+											WALTableProperties.regionObserverMarkerColumn,
+											WALTableProperties.randomValue);
+
+									toBePersistedPut = createLock;
+									region.put(createLock);
+									isLockPlaced = true;
+								}
 							}
 
 							// Since Lock is not placed and we are going to return, we should
 							// persist the WALEdits
 							// that we have until now.
 							// Persist the WALEdit information.
-							if (!walEdit.isEmpty()) {
+							if (!isLockPlaced && !walEdit.isEmpty()) {
+								sysout("PERSISTING WRITES WHILE LOCKING !!!");
 								log.append(region.getRegionInfo(),
 										WALTableProperties.dataTableName, walEdit, now, htd);
 							}
 						}
 					}
-
-					// if (isMigrated) {
-					// // This shows that the detour lock was deleted.
-					// flag = 3;
-					// } else {
-					// sysout("Creating a new lock and pre-locking it.");
-					// Put createLock = new Put(indirectionKey);
-					// createLock.setWriteToWAL(false);
-					// createLock.add(WALTableProperties.WAL_FAMILY,
-					// writeLockColumn, appTimestamp, Bytes
-					// .toBytes(transactionId));
-					// createLock.add(WALTableProperties.WAL_FAMILY,
-					// WALTableProperties.isLockPlacedOrMigratedColumn,
-					// appTimestamp, Bytes.toBytes(WALTableProperties.one));
-					// createLock.add(WALTableProperties.WAL_FAMILY, versionColumn,
-					// appTimestamp, Bytes.toBytes(Long.toString(zero)));
-					// createLock.add(WALTableProperties.WAL_FAMILY,
-					// WALTableProperties.isLockMigratedColumn,
-					// WALTableProperties.appTimestamp, Bytes
-					// .toBytes(WALTableProperties.zero));
-					// toBePersistedPut = createLock;
-					//
-					// region.put(createLock);
-					//
-					// isLockPlaced = true;
-					// }
-					/*
-					 * else {sysout(
-					 * "Not in region, hence sending a request to lock through HTable, for key: "
-					 * + Bytes.toString(indirectionKey)); HTable table = (HTable)
-					 * tablePool .getTable(WALTableProperties.walTableName); isLockPlaced
-					 * = table.checkAndPut(indirectionKey, WALTableProperties.WAL_FAMILY,
-					 * writeLockColumn, Bytes.toBytes(zero), new Put(indirectionKey).add(
-					 * WALTableProperties.WAL_FAMILY, writeLockColumn, appTimestamp, Bytes
-					 * .toBytes(transactionId)));
-					 * 
-					 * if (!isLockPlaced) { Get g = new Get(indirectionKey);
-					 * g.addColumn(WALTableProperties.WAL_FAMILY, writeLockColumn); Result
-					 * r = table.get(g); otherTrxId =
-					 * Bytes.toLong(r.getValue(WALTableProperties.WAL_FAMILY,
-					 * writeLockColumn)); sysout("Could not obtain lock for key: " +
-					 * Bytes.toString(indirectionKey));
-					 * sysout("OtherTrxId holding the lock is: " + otherTrxId); } }
-					 */
 
 					// Find out if the next lock is under the same WAL.
 					// If so, change the value of "keyBeingOperatedOn" to the next WAL.
@@ -574,7 +563,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 							nextLockIsUnderTheSameWAL = true;
 							logId = nextLogId;
 
-							isMigrated = isKeyMigrated.get(i + 1);
+							atMigratedLocation = isLockAtMigratedLocation.get(i + 1);
 							origKey = keys.get(i + 1);
 							sysout("Processed lock: " + Bytes.toString(indirectionKey));
 							indirectionKey = Bytes.toBytes(Bytes.toString(logId.getKey())
@@ -601,7 +590,8 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 							}
 
 							if (origLogIdForNextKey != null
-									&& origLogIdForNextKey != nextLogId) {
+									&& !origLogIdForNextKey
+											.equalsWithoutCheckingCommitType(nextLogId)) {
 								// we just stack all the WALEdits and append them to log before
 								// leaving.
 								// TODO: Even though we are postponing the log append, we are
@@ -624,6 +614,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 								// We are operating on the original logs which have boundaries
 								// across WALs.
 								// Persist the WALEdit information.
+								sysout("PERSISTING WRITES WHILE LOCKING !!!");
 								log.append(region.getRegionInfo(),
 										WALTableProperties.dataTableName, walEdit, now, htd);
 							}
@@ -655,6 +646,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 				for (KeyValue kv : walEdit.getKeyValues())
 					combinedWALEdit.add(kv);
 			}
+			sysout("PERSISTING WRITES WHILE LOCKING !!!");
 			log.append(region.getRegionInfo(), WALTableProperties.dataTableName,
 					combinedWALEdit, now, htd);
 		}
@@ -921,6 +913,52 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 			} catch (ExecutionException e) {
 				// TODO Auto-generated catch block
 				e.printStackTrace();
+			}
+		}
+
+		return snapshots;
+	}
+
+	// This function returns the dummy snapshots, none of them will have any
+	// information.
+	// This is the case in our implementation where we resorted to equating
+	// currentTs with syncTs
+	// every single time there is a write to the log. In other words, data is
+	// always flushed while
+	// commiting and so the snapshots will never contain any data.
+	// We wrote this function to avoid the thread pool and its associated
+	// overheads encountered when
+	// using the regular getSnapshotsForLogIds() function.
+	private List<Snapshot> getDummySnapshotsForLogIds(List<LogId> logIdList)
+			throws IOException {
+		List<Snapshot> snapshots = new ArrayList<Snapshot>(logIdList.size());
+		for (int i = 0; i < logIdList.size(); i++)
+			snapshots.add(i, null);
+		RegionCoprocessorEnvironment env = (RegionCoprocessorEnvironment) getEnvironment();
+		HRegion region = env.getRegion();
+
+		for (int logIdIndex = 0; logIdIndex < logIdList.size(); logIdIndex++) {
+			final LogId logId = logIdList.get(logIdIndex);
+			if (HRegion.rowIsInRange(region.getRegionInfo(), logId.getKey())) {
+				sysout("LogId in region: " + logId.toString());
+				Snapshot snapshot = new Snapshot();
+				Map<String, Write> writeMap = new HashMap<String, Write>();
+				// Dummy currentTs.
+				snapshot.setTimestamp(0);
+				snapshot.setWriteMap(writeMap);
+				snapshots.set(logIdIndex, snapshot);
+			} else {
+				// Fill the snapshots list with negatively timed snapshot, because the
+				// client
+				// checks the non exitence
+				// of a logId on a region by the presence of a negative timestamp at
+				// that position.
+				// System.out.println("LogId not in region: " + logId.toString());
+				Snapshot snapshot = new Snapshot();
+				snapshot.setTimestamp(-1);
+				Map<String, Write> writeMap = new HashMap<String, Write>();
+				snapshot.setWriteMap(writeMap);
+				snapshots.set(logIdIndex, snapshot);
 			}
 		}
 
@@ -1623,6 +1661,75 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 	@Override
 	public List<List<Result>> getAfterServerSideMerge(List<LogId> logs,
 			List<List<Get>> gets) throws IOException {
+		if (logs.size() > 3) 
+			return parallelGetAfterServerSideMerge(logs, gets);
+		
+		return serialGetAfterServerSideMerge(logs, gets);
+	}
+
+	// BIG-TODO: We are skipping the "merge with snapshots" part. Because in our current
+	// implementation currentTs is always equal to syncTs and so the snapshot is always
+	// empty.
+	public List<List<Result>> parallelGetAfterServerSideMerge(List<LogId> logs, List<List<Get>> gets)
+			throws IOException {
+		// Get the coprocessor environment
+		RegionCoprocessorEnvironment env = (RegionCoprocessorEnvironment) getEnvironment();
+		final HRegion region = env.getRegion();
+		HTableDescriptor htd = region.getTableDesc();
+
+		List<List<Result>> results = new LinkedList<List<Result>>();
+		for (int j = 0; j < logs.size(); j++) {
+			results.add(j, null);
+		}
+		
+		List<Future<List<Result>>> futures = new ArrayList<Future<List<Result>>>(logs.size());
+		for (int i = 0; i < logs.size(); i++)
+			futures.add(i, null);
+		for (int logIdIndex = 0; logIdIndex < logs.size(); logIdIndex++) {
+			final LogId logId = logs.get(logIdIndex);
+			final List<Get> getsForLogId = gets.get(logIdIndex);
+			if (!HRegion.rowIsInRange(region.getRegionInfo(), logId.getKey())) {
+				// Setting empty result list. Clients unfortunately can't take a null.
+				results.set(logIdIndex, new LinkedList<Result>());
+				continue;
+			}
+			sysout("LogId in region: " + logId.toString());
+			
+			Future<List<Result>> future = pool.submit(new Callable<List<Result>>() {
+					public List<Result> call() throws Exception {
+						List<Result> resultsForLogId = new ArrayList<Result>(getsForLogId.size());
+						for (Get g: getsForLogId) {
+							resultsForLogId.add(region.get(g, null));
+						}
+						return resultsForLogId;
+					}
+				});
+				futures.set(logIdIndex, future);
+		}
+
+		// Go through the futures and grab the snapshots.
+		for (int i = 0; i < futures.size(); i++) {
+			Future<List<Result>> future = futures.get(i);
+			if (future == null)
+				continue;
+			try {
+				List<Result> resultsForLogId = future.get();
+				// size of futures is the same as size of logs, so we can use "i" as the result index.
+				results.set(i, resultsForLogId);
+			} catch (InterruptedException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			} catch (ExecutionException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		}
+
+		return results;
+	}
+
+	public List<List<Result>> serialGetAfterServerSideMerge(List<LogId> logs,
+			List<List<Get>> gets) throws IOException {
 		// Get the coprocessor environment
 		RegionCoprocessorEnvironment env = (RegionCoprocessorEnvironment) getEnvironment();
 		HRegion region = env.getRegion();
@@ -1633,7 +1740,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 			results.add(new LinkedList<Result>());
 		}
 
-		List<Snapshot> snapshots = getSnapshotsForLogIds(logs);
+		List<Snapshot> snapshots = getDummySnapshotsForLogIds(logs);
 		for (int i = 0; i < snapshots.size(); i++) {
 			Snapshot snapshot = snapshots.get(i);
 			if (snapshot != null && snapshot.getTimestamp() < 0) {

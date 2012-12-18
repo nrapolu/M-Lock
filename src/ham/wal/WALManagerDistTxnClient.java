@@ -55,7 +55,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 	}
 
 	public static void sysout(long trxId, String otp) {
-		//System.out.println(trxId + " : " + otp);
+		System.out.println(trxId + " : " + otp);
 	}
 
 	public DistTxnState beginTransaction() throws IOException {
@@ -1146,7 +1146,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		// Iterating in the order of LogIds so as to avoid deadlocks.
 		final List<LogId> logs = new LinkedList<LogId>();
 		final List<ImmutableBytesWritable> keys = new LinkedList<ImmutableBytesWritable>();
-		final List<Boolean> isKeyMigrated = new LinkedList<Boolean>();
+		final List<Boolean> isLockAtMigratedLocation = new LinkedList<Boolean>();
 		Iterator<LogId> logIdItr = writeBuffer.navigableKeySet().iterator();
 		while (logIdItr.hasNext()) {
 			LogId logId = logIdItr.next();
@@ -1162,15 +1162,15 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 				LogId correspLogId = LockMigrator.afterMigrationKeyMap.get(key);
 				if (correspLogId != null) {
 					logs.add(correspLogId);
-					if (correspLogId.getCommitType() == LogId.ONLY_DELETE) {
-						isKeyMigrated.add(true);
+					if (!correspLogId.equals(logId)) {
+						isLockAtMigratedLocation.add(true);
 					} else {
-						isKeyMigrated.add(false);
+						isLockAtMigratedLocation.add(false);
 					}
 					sysout(trxId, correspLogId.toString());
 				} else {
 					logs.add(logId);
-					isKeyMigrated.add(false);
+					isLockAtMigratedLocation.add(false);
 					sysout(trxId, logId.toString());
 				}
 			}
@@ -1258,7 +1258,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 			for (int i = 0; i < nbLocksAcquired; i++) {
 				logs.remove(0);
 				keys.remove(0);
-				isKeyMigrated.remove(0);
+				isLockAtMigratedLocation.remove(0);
 			}
 			AcquireLockCallBack aLockCallBack = new AcquireLockCallBack();
 			logTable
@@ -1272,7 +1272,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 										WALManagerDistTxnProtocol instance) throws IOException {
 									return instance.commitRequestAcquireLocksViaIndirection(
 											transactionState.getTransactionId(), logs, keys,
-											isKeyMigrated);
+											isLockAtMigratedLocation);
 								}
 							}, aLockCallBack);
 
@@ -1348,7 +1348,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 					}
 					logs.set(indexOfMigratedKey, previousLogIdOfMigratedKey);
 					// Make a note that migration is removed.
-					isKeyMigrated.set(indexOfMigratedKey, false);
+					isLockAtMigratedLocation.set(indexOfMigratedKey, false);
 					continue;
 				} else if (flag == 2) {
 					// We found a detour. Note it in the dynamicMigrationMap and change
@@ -1367,7 +1367,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 								+ logs.size());
 						logs.set(indexOfMigratedKey, migratedToLogId);
 						// Make a note that we are now locking at the migrated destination.
-						isKeyMigrated.set(indexOfMigratedKey, true);
+						isLockAtMigratedLocation.set(indexOfMigratedKey, true);
 						sysout(trxId, "After changing the route in logs list, size is : "
 								+ logs.size());
 					}

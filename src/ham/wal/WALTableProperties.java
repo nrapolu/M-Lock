@@ -82,7 +82,7 @@ public class WALTableProperties {
 		// prefix.
 		// The walTable may also be split using the warehouse-id
 		List<byte[]> splitKeys = new ArrayList<byte[]>();
-		if (numSplits <=11) {
+		if (numSplits <=11 && numSplits > 1) {
 			for (int i = 1; i <= numSplits-2; i++) {
 				splitKeys.add(Bytes.toBytes(new Integer(i).toString()));
 			}
