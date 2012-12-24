@@ -2,6 +2,8 @@ package ham.wal;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Hashtable;
 import java.util.List;
 
 import org.apache.hadoop.conf.Configuration;
@@ -12,50 +14,53 @@ import org.apache.hadoop.hbase.client.HTable;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.util.Bytes;
 
-public class TPCCTableProperties extends WALTableProperties {
-	static byte[] warehouseTaxRateColumn = Bytes.toBytes("W_TAX");
-	static byte[] districtTaxRateColumn = Bytes.toBytes("D_TAX");
-	static byte[] districtNextOrderIdColumn = Bytes.toBytes("D_NEXT_O_ID");
-	static byte[] customerDiscountColumn = Bytes.toBytes("C_DISCOUNT");
-	static byte[] customerLastNameColumn = Bytes.toBytes("C_LAST");
-	static byte[] customerCreditColumn = Bytes.toBytes("C_CREDIT");
-	static byte[] orderAllLocalColumn = Bytes.toBytes("O_ALL_LOCAL");
-	static byte[] orderOrderLineCountColumn = Bytes.toBytes("O_OL_CNT");
-	static byte[] orderIdColumn = Bytes.toBytes("O_ID");
-	static byte[] orderDistrictIdColumn = Bytes.toBytes("O_D_ID");
-	static byte[] orderWarehouseIdColumn = Bytes.toBytes("O_W_ID");
-	static byte[] orderCustomerIdColumn = Bytes.toBytes("O_C_ID");
-	static byte[] itemPriceColumn = Bytes.toBytes("I_PRICE");
-	static byte[] itemNameColumn = Bytes.toBytes("I_NAME");
-	static byte[] newOrderIdColumn = Bytes.toBytes("NO_O_ID");
-	static byte[] newOrderDistrictIdColumn = Bytes.toBytes("NO_D_ID");
-	static byte[] newOrderWarehouseIdColumn = Bytes.toBytes("NO_W_ID");
-	static byte[] stockQuantityColumn = Bytes.toBytes("S_QUANTITY");
-	static byte[] stockOrderCountColumn = Bytes.toBytes("S_ORDER_CNT");
-	static byte[] stockSoldYearToDateColumn = Bytes.toBytes("S_YTD");
-	static byte[] orderLineOrderIdColumn = Bytes.toBytes("OL_O_ID");
-	static byte[] orderLineNumberColumn = Bytes.toBytes("OL_NUMBER");
-	static byte[] orderLineDistrictIdColumn = Bytes.toBytes("OL_D_ID");
-	static byte[] orderLineWarehouseIdColumn = Bytes.toBytes("OL_W_ID");
-	static byte[] orderLineItemIdColumn = Bytes.toBytes("OL_I_ID");
-	static byte[] orderLineSupplyWarehouseIdColumn = Bytes
-			.toBytes("OL_SUPPLY_W_ID");
-	static byte[] orderLineQuantityColumn = Bytes.toBytes("OL_QUANTITY");
-	static byte[] orderLineAmountColumn = Bytes.toBytes("OL_AMOUNT");
+public class TPCCTablePropertiesClusteredPartitioning extends
+		TPCCTableProperties {
 
-	static String orderWALPrefix = "!";
-	static String districtWALPrefix = "=";
+	static HashMap<Long, String> warehouseKeyMap = new HashMap<Long, String>();
+	static HashMap<Long, String> toBePrependedStringMapForMigratedLocks = new HashMap<Long, String>();
 
-	static int constantTaxRate = 10;
-	static int constantItemPrice = 10;
-	static int constantDiscount = 10;
-
-	static int numItemsPerWarehouse = 100000;
-	static int numCustomersPerDistrict = 3000;
-
-	public TPCCTableProperties(Configuration conf, HBaseAdmin admin) {
+	{
+		// Also populate the hashMap in this class which maps the warehouse id to
+		// the actual key
+		// to be used.
+		warehouseKeyMap.put(new Long(1), "0001");
+		warehouseKeyMap.put(new Long(2), "0502");
+		warehouseKeyMap.put(new Long(3), "1003");
+		warehouseKeyMap.put(new Long(4), "1504");
+		warehouseKeyMap.put(new Long(5), "2005");
+		warehouseKeyMap.put(new Long(6), "2506");
+		warehouseKeyMap.put(new Long(7), "3007");
+		warehouseKeyMap.put(new Long(8), "3508");
+		warehouseKeyMap.put(new Long(9), "4009");
+		warehouseKeyMap.put(new Long(10), "4510");
+		warehouseKeyMap.put(new Long(11), "5011");
+		warehouseKeyMap.put(new Long(12), "5512");
+		warehouseKeyMap.put(new Long(13), "6013");
+		warehouseKeyMap.put(new Long(14), "6514");
+		warehouseKeyMap.put(new Long(15), "7015");
+		warehouseKeyMap.put(new Long(16), "7516");
+		warehouseKeyMap.put(new Long(17), "8017");
+		warehouseKeyMap.put(new Long(18), "8518");
+		warehouseKeyMap.put(new Long(19), "9019");
+		warehouseKeyMap.put(new Long(20), "9520");
+		
+		// Fill in the toBePrependedStringForMigratedLocks map. Assumption is that the last
+		// 5 nodes (demarcated by the last 4 split keys) will hold the migrated locks.
+		toBePrependedStringMapForMigratedLocks.put(new Long(1), "75");
+		toBePrependedStringMapForMigratedLocks.put(new Long(2), "80");
+		toBePrependedStringMapForMigratedLocks.put(new Long(3), "85");
+		toBePrependedStringMapForMigratedLocks.put(new Long(4), "90");
+		toBePrependedStringMapForMigratedLocks.put(new Long(5), "95");
+	}
+	
+	public TPCCTablePropertiesClusteredPartitioning(Configuration conf,
+			HBaseAdmin admin) {
 		super(conf, admin);
 		// TODO Auto-generated constructor stub
+	}
+
+	public TPCCTablePropertiesClusteredPartitioning() {
 	}
 
 	public void createAndPopulateTable(long numEntries, long numSplits)
@@ -89,17 +94,28 @@ public class TPCCTableProperties extends WALTableProperties {
 			}
 			splitKeys.add(Bytes.toBytes(":"));
 		} else if (numSplits == 20) {
-			// We need the following splits 10000000, 1:, 25, 2:, 35, 3:, ..., 85, 8:,
-			// 95, 9:, :
-			splitKeys.add(Bytes.toBytes("10000000"));
-			for (int i = 1; i <= 9; i++) {
-				String baseStr = new Integer(i).toString();
-				if (i != 1)
-					splitKeys.add(Bytes.toBytes(baseStr + "5"));
-				// if (i != 9)
-				splitKeys.add(Bytes.toBytes(baseStr + ":"));
-			}
-			splitKeys.add(Bytes.toBytes(":"));
+			// We need the following splits: 00:, 05:, 10:, 15:, 20:, 25:, 30:, 35:,
+			// 40:, 45:,
+			// 50:, 55:, 60:, 65:, 70:, 75:, 80:, 85:, 90:, 95:
+			splitKeys.add(Bytes.toBytes("00:"));
+			splitKeys.add(Bytes.toBytes("05:"));
+			splitKeys.add(Bytes.toBytes("10:"));
+			splitKeys.add(Bytes.toBytes("15:"));
+			splitKeys.add(Bytes.toBytes("20:"));
+			splitKeys.add(Bytes.toBytes("25:"));
+			splitKeys.add(Bytes.toBytes("30:"));
+			splitKeys.add(Bytes.toBytes("35:"));
+			splitKeys.add(Bytes.toBytes("40:"));
+			splitKeys.add(Bytes.toBytes("45:"));
+			splitKeys.add(Bytes.toBytes("50:"));
+			splitKeys.add(Bytes.toBytes("55:"));
+			splitKeys.add(Bytes.toBytes("60:"));
+			splitKeys.add(Bytes.toBytes("65:"));
+			splitKeys.add(Bytes.toBytes("70:"));
+			splitKeys.add(Bytes.toBytes("75:"));
+			splitKeys.add(Bytes.toBytes("80:"));
+			splitKeys.add(Bytes.toBytes("85:"));
+			splitKeys.add(Bytes.toBytes("90:"));
 		}
 
 		HTableDescriptor dataTableDesc = new HTableDescriptor(dataTableName);
@@ -148,9 +164,50 @@ public class TPCCTableProperties extends WALTableProperties {
 		HBaseBackedTransactionLogger.createTable(conf);
 	}
 
-	public TPCCTableProperties() {
+	public String createWarehouseTableKey(long warehouseId) {
+		return warehouseKeyMap.get(warehouseId) + ":" + "warehouse";
 	}
 
+	public String createItemTableKey(long itemId) {
+		return Long.toString(itemId) + ":" + "item";
+	}
+
+	public String createDistrictTableKey(long warehouseId, long districtId) {
+		return warehouseKeyMap.get(warehouseId) + ":" + Long.toString(districtId)
+				+ ":" + "district";
+	}
+
+	public String createCustomerTableKey(long warehouseId, long districtId,
+			long customerId) {
+		return warehouseKeyMap.get(warehouseId) + ":" + Long.toString(districtId)
+				+ ":" + Long.toString(customerId) + ":" + "customer";
+	}
+
+	public String createStockTableKey(long warehouseId, long itemId) {
+		return warehouseKeyMap.get(warehouseId) + ":" + Long.toString(itemId) + ":"
+				+ "stock";
+	}
+
+	public String createOrderTableKey(long warehouseId, long districtId,
+			long nextOrderId) {
+		return warehouseKeyMap.get(warehouseId) + ":" + districtId + ":"
+				+ nextOrderId + ":" + "order" + WALTableProperties.logAndKeySeparator
+				+ warehouseKeyMap.get(warehouseId) + ":" + districtId + ":"
+				+ nextOrderId + ":" + "order";
+	}
+
+	public String createToBeMigratedNodeHint(long homeWarehouseId) {
+		// Assumption: There are 15 warehouses sitting on 15 different nodes. 5 nodes will host the
+		// migrated locks. TtoBePrependedStringForMigratedLocks map holds the String to be prepended 
+		// for the 5 different lock-servers.
+		long numLockServers = 5;
+		long hashedHomeWarehouse = (homeWarehouseId % numLockServers) + 1;
+		String toBePrependedString = toBePrependedStringMapForMigratedLocks.get(hashedHomeWarehouse);
+		// Note that we aren't using any separator.
+		String finalMigratedNodeHint = toBePrependedString + homeWarehouseId;
+		return finalMigratedNodeHint;
+	}
+	
 	// This makes the data table already present and load balanced in the cluster.
 	// The execution of transactions would only lead to overwriting of values.
 	public void populateDataTableEntries(long numWarehouses, boolean writeBlob)
@@ -161,7 +218,7 @@ public class TPCCTableProperties extends WALTableProperties {
 		byte[] blob = new byte[BLOB_SIZE];
 		// Populate the WAREHOUSE table.
 		for (long i = 1; i <= numWarehouses; i++) {
-			String key = Long.toString(i) + ":" + "warehouse";
+			String key = createWarehouseTableKey(i);
 			Put p = new Put(Bytes.toBytes(key));
 			p.add(dataFamily, warehouseTaxRateColumn, appTimestamp, Bytes
 					.toBytes(Integer.toString(constantTaxRate)));
@@ -180,7 +237,7 @@ public class TPCCTableProperties extends WALTableProperties {
 
 		// constant number of items in each warehouse.
 		for (long i = 1; i <= numItemsPerWarehouse; i++) {
-			String key = Long.toString(i) + ":" + "item";
+			String key = createItemTableKey(i);
 			Put p = new Put(Bytes.toBytes(key));
 			p.add(dataFamily, itemPriceColumn, appTimestamp, Bytes.toBytes(Integer
 					.toString(constantItemPrice)));
@@ -202,8 +259,7 @@ public class TPCCTableProperties extends WALTableProperties {
 		// Populate the District table. There would be 10 districts per warehouse.
 		for (long i = 1; i <= numWarehouses; i++) {
 			for (long j = 1; j <= 10; j++) {
-				String key = districtWALPrefix + Long.toString(i) + ":"
-						+ Long.toString(j) + ":" + "district";
+				String key = createDistrictTableKey(i, j);
 				Put p = new Put(Bytes.toBytes(key));
 				p.add(dataFamily, districtTaxRateColumn, appTimestamp, Bytes
 						.toBytes(Integer.toString(constantTaxRate)));
@@ -227,8 +283,7 @@ public class TPCCTableProperties extends WALTableProperties {
 		for (long i = 1; i <= numWarehouses; i++) {
 			for (long j = 1; j <= 10; j++) {
 				for (long k = 1; k <= numCustomersPerDistrict; k++) {
-					String key = Long.toString(j) + ":" + Long.toString(i) + ":"
-							+ Long.toString(k) + ":" + "customer";
+					String key = createCustomerTableKey(i, j, k);
 					Put p = new Put(Bytes.toBytes(key));
 					p.add(dataFamily, customerDiscountColumn, appTimestamp, Bytes
 							.toBytes(Integer.toString(constantDiscount)));
@@ -254,7 +309,7 @@ public class TPCCTableProperties extends WALTableProperties {
 		// Populate the Stock table. Each warehouse has 100000 items.
 		for (long i = 1; i <= numItemsPerWarehouse; i++) {
 			for (long j = 1; j <= numWarehouses; j++) {
-				String key = Long.toString(i) + ":" + Long.toString(j) + ":" + "stock";
+				String key = createStockTableKey(j, i);
 				Put p = new Put(Bytes.toBytes(key));
 				p.add(dataFamily, stockQuantityColumn, appTimestamp, Bytes.toBytes(Long
 						.toString(zero)));
@@ -293,7 +348,7 @@ public class TPCCTableProperties extends WALTableProperties {
 
 		// Populate the WAREHOUSE table.
 		for (long i = 1; i <= numWarehouses; i++) {
-			String keyStr = Long.toString(i) + ":" + "warehouse";
+			String keyStr = createWarehouseTableKey(i);
 			byte[] key = Bytes.toBytes(keyStr);
 			LogId logId = getLogIdForKey(key);
 			byte[] finalKey = Bytes.toBytes(Bytes.toString(logId.getKey())
@@ -317,7 +372,7 @@ public class TPCCTableProperties extends WALTableProperties {
 
 		// constant number of items in each warehouse.
 		for (long i = 1; i <= numItemsPerWarehouse; i++) {
-			String keyStr = Long.toString(i) + ":" + "item";
+			String keyStr = createItemTableKey(i);
 			byte[] key = Bytes.toBytes(keyStr);
 			LogId logId = getLogIdForKey(key);
 			byte[] finalKey = Bytes.toBytes(Bytes.toString(logId.getKey())
@@ -342,8 +397,7 @@ public class TPCCTableProperties extends WALTableProperties {
 		// Populate the District table. There would be 10 districts per warehouse.
 		for (long i = 1; i <= numWarehouses; i++) {
 			for (long j = 1; j <= 10; j++) {
-				String keyStr = districtWALPrefix + Long.toString(i) + ":"
-						+ Long.toString(j) + ":" + "district";
+				String keyStr = createDistrictTableKey(i, j);
 				byte[] key = Bytes.toBytes(keyStr);
 				LogId logId = getLogIdForKey(key);
 				byte[] finalKey = Bytes.toBytes(Bytes.toString(logId.getKey())
@@ -393,8 +447,7 @@ public class TPCCTableProperties extends WALTableProperties {
 		// Populate the Stock table. Each warehouse has 100000 items.
 		for (long i = 1; i <= numItemsPerWarehouse; i++) {
 			for (long j = 1; j <= numWarehouses; j++) {
-				String keyStr = Long.toString(i) + ":" + Long.toString(j) + ":"
-						+ "stock";
+				String keyStr = createStockTableKey(j, i);
 				byte[] key = Bytes.toBytes(keyStr);
 				LogId logId = getLogIdForKey(key);
 				byte[] finalKey = Bytes.toBytes(Bytes.toString(logId.getKey())
@@ -426,4 +479,5 @@ public class TPCCTableProperties extends WALTableProperties {
 
 		System.out.println("Wrote default lock data!");
 	}
+
 }

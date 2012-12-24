@@ -582,6 +582,8 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		HashMap<ImmutableBytesWritable, Integer> getRowToIndexMap = new HashMap<ImmutableBytesWritable, Integer>();
 		for (int index = 0; index < gets.size(); index++) {
 			Get g = gets.get(index);
+			sysout(transactionState.getTransactionId(), "Asking for this row: "
+					+ Bytes.toString(g.getRow()));
 			LogId logId = WALTableProperties.getLogIdForKey(g.getRow());
 			List<Get> getList = logIdToGetMap.get(logId);
 			if (getList == null) {
@@ -1324,13 +1326,17 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 				// For now, we don't do roll-forwarding, we just retry acquiring the
 				// lock either at the
 				// same key or at the destination key.
-				// If flag is 1 -- i.e, someone has the lock -- we have to abort if that key is in our
-				// readSet. This is because, if someone has the write-lock, then they are going to update it.
-				// In that case, we'll anyway abort in the checkReadVersions function after
-				// obtaining this lock. To avoid all the other work, we just abort right now.
-				if (flag == 1) 
+				// If flag is 1 -- i.e, someone has the lock -- we have to abort if that
+				// key is in our
+				// readSet. This is because, if someone has the write-lock, then they
+				// are going to update it.
+				// In that case, we'll anyway abort in the checkReadVersions function
+				// after
+				// obtaining this lock. To avoid all the other work, we just abort right
+				// now.
+				if (flag == 1)
 					break;
-				
+
 				// If flag is 3, then it means the detour was deleted, which means we
 				// have to
 				// go back.
@@ -1378,10 +1384,11 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		transactionState.setNbDetoursEncountered(nbDetoursEncountered);
 		transactionState.setNbNetworkHopsInTotal(nbNetworkHopsInTotal);
 		if (!allLocked) {
-			// we need to abort if we haven't got all our locks and are exiting this function.
+			// we need to abort if we haven't got all our locks and are exiting this
+			// function.
 			return false;
 		}
-		
+
 		return true;
 	}
 
@@ -1517,13 +1524,17 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		List<Get> actions = new LinkedList<Get>();
 		for (Pair<ImmutableBytesWritable, Long> readWithVersion : readVersionList) {
 			ImmutableBytesWritable key = readWithVersion.getFirst();
-			// TODO: Should also fetch write-lock information for this object. Should abort if
-			// we found a lock. Specifically, in our case, we need to fetch isLockPlacedOrMigrated 
-			// column and also isLockMigrated column. If the former is set to 1 and the latter is set
+			// TODO: Should also fetch write-lock information for this object. Should
+			// abort if
+			// we found a lock. Specifically, in our case, we need to fetch
+			// isLockPlacedOrMigrated
+			// column and also isLockMigrated column. If the former is set to 1 and
+			// the latter is set
 			// to zero, then the lock is placed.
 			Get g = new Get(key.get());
 			g.addColumn(dataFamily, versionColumn);
-			g.addColumn(WALTableProperties.WAL_FAMILY, WALTableProperties.regionObserverMarkerColumn);
+			g.addColumn(WALTableProperties.WAL_FAMILY,
+					WALTableProperties.regionObserverMarkerColumn);
 			actions.add(g);
 		}
 
@@ -2011,7 +2022,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 				// coprocessor exec request
 				// to all WAL logs involved in the trx.
 				abortResult = abortResult && result;
-				//sysout(trxId, "In AbortCallBack, result is: " + result);
+				// sysout(trxId, "In AbortCallBack, result is: " + result);
 			}
 
 			boolean getResult() {
@@ -2071,10 +2082,10 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 						// lock-table.
 						if (Bytes.toString(logId.getKey()).startsWith(
 								TPCCTableProperties.districtWALPrefix)) {
-							//sysout(trxId, "Found the district log Id: "
-							//		+ Bytes.toString(logId.getKey()));
-							//sysout(trxId, "GIVING ONLY_UNLOCK attribute for destLogId: "
-							//		+ destLogId.toString());
+							// sysout(trxId, "Found the district log Id: "
+							// + Bytes.toString(logId.getKey()));
+							// sysout(trxId, "GIVING ONLY_UNLOCK attribute for destLogId: "
+							// + destLogId.toString());
 							destLogId.setCommitType(LogId.ONLY_UNLOCK);
 						}
 

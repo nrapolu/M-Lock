@@ -28,6 +28,7 @@ public class TestWALManagerDistTxn {
 
 	WALTableProperties tableProperties = null;
 	Configuration conf = null;
+	HBaseAdmin admin = null;
 	byte[] dataTableName = WALTableProperties.dataTableName;
 	byte[] walTableName = WALTableProperties.walTableName;
 	byte[] dataFamily = WALTableProperties.dataFamily;
@@ -35,8 +36,7 @@ public class TestWALManagerDistTxn {
 
 	public TestWALManagerDistTxn() throws IOException {
 		this.conf = (Configuration) HBaseConfiguration.create();
-		HBaseAdmin admin = new HBaseAdmin(conf);
-		tableProperties = new TPCCTableProperties(conf, admin);
+		this.admin = new HBaseAdmin(conf);
 	}
 
 	/*
@@ -165,8 +165,10 @@ public class TestWALManagerDistTxn {
 				String[] tokens = waitingQueue.pollLast();
 				lenOfTrx = tokens.length;
 
-				//TPCCPessimisticNewOrderTrxExecutor trxExecutor = new TPCCPessimisticNewOrderTrxExecutor(
-				TPCCNewOrderTrxExecutor trxExecutor = new TPCCNewOrderTrxExecutor(
+				// TPCCPessimisticNewOrderTrxExecutor trxExecutor = new
+				// TPCCPessimisticNewOrderTrxExecutor(
+				// TPCCNewOrderTrxExecutor trxExecutor = new TPCCNewOrderTrxExecutor(
+				TPCCNewOrderTrxExecutorClusteredPartitioning trxExecutor = new TPCCNewOrderTrxExecutorClusteredPartitioning(
 						tokens, WALTableProperties.dataTableName,
 						WALTableProperties.walTableName, tablePool,
 						walManagerDistTxnClient, thinkingTime, lenOfTrx, contentionOrder,
@@ -250,7 +252,8 @@ public class TestWALManagerDistTxn {
 						+ "3 - Populate routing entries from file, "
 						+ "4 - Populate local routing table from central table, "
 						+ "5 - Execute transactions from file. "
-						+ " <AvgLenOfTrx> <TrxFile> <CountOfTrxToBeExecuted> [NumOfDataSplits] [DoMigrateLocks] [ContentionOrder]");
+						+ " <AvgLenOfTrx> <TrxFile> <CountOfTrxToBeExecuted> [NumOfDataSplits] [DoMigrateLocks]"
+						+ " [ContentionOrder] [NumItemsPerWarehouseTPCC] [IsClusteredPartitioning]");
 		System.exit(0);
 	}
 
@@ -266,19 +269,37 @@ public class TestWALManagerDistTxn {
 			long numDataEntries = Long.parseLong(args[0]);
 			int lenOfTrx = Integer.parseInt(args[2]);
 			TestWALManagerDistTxn hbaseTrxCli = new TestWALManagerDistTxn();
-			WALTableProperties walTableProps = hbaseTrxCli.tableProperties;
 			String optionStr = args[1];
 			long countOfTrxToBeExecuted = Long.parseLong(args[4]);
 			int numDataSplits = 1;
 			boolean doMigrateLocks = false;
 			int contentionOrder = 0;
+			int numItemsPerWarehouseTPCC = 100000;
+			boolean isClusteredPartitioning = false;
 			if (args.length >= 6)
 				numDataSplits = Integer.parseInt(args[5]);
 			if (args.length >= 7)
 				doMigrateLocks = (Integer.parseInt(args[6]) == 1) ? true : false;
-			if (args.length == 8)
+			if (args.length >= 8)
 				contentionOrder = Integer.parseInt(args[7]);
-			
+			if (args.length >= 9) {
+				numItemsPerWarehouseTPCC = Integer.parseInt(args[8]);
+				TPCCTableProperties.numItemsPerWarehouse = numItemsPerWarehouseTPCC;
+			}
+			if (args.length >= 10) {
+				isClusteredPartitioning = (Integer.parseInt(args[9]) == 1) ? true
+						: false;
+			}
+
+			WALTableProperties walTableProps = null;
+
+			if (isClusteredPartitioning)
+				walTableProps = new TPCCTablePropertiesClusteredPartitioning(
+						hbaseTrxCli.conf, hbaseTrxCli.admin);
+			else
+				walTableProps = new TPCCTableProperties(hbaseTrxCli.conf,
+						hbaseTrxCli.admin);
+
 			for (int i = 0; i < optionStr.length(); i++) {
 				char option = optionStr.charAt(i);
 				switch (option) {
@@ -334,11 +355,11 @@ public class TestWALManagerDistTxn {
 					double avgPutShadowTime = (double) stats.putShadowTime
 							/ (double) countOfTrxToBeExecuted;
 					double avgPutTxnStateTime = (double) stats.putTxnStateTime
-						/ (double) countOfTrxToBeExecuted;
+							/ (double) countOfTrxToBeExecuted;
 					double avgFirstPutTxnStateTime = (double) stats.firstPutTxnStateTime
-						/ (double) countOfTrxToBeExecuted;
+							/ (double) countOfTrxToBeExecuted;
 					double avgSecondPutTxnStateTime = (double) stats.secondPutTxnStateTime
-						/ (double) countOfTrxToBeExecuted;
+							/ (double) countOfTrxToBeExecuted;
 					double avgLockingTime = (double) stats.lockingTime
 							/ (double) countOfTrxToBeExecuted;
 					double avgVersionCheckTime = (double) stats.versionCheckTime
@@ -361,8 +382,9 @@ public class TestWALManagerDistTxn {
 							+ stats.nbDetoursEncountered);
 					System.out.println("Average nb of Detours per trx: "
 							+ avgNbDetoursPerTrx);
-					System.out.println("Average nb of Network round trips for locking per trx: "
-							+ avgNbNetworkRoundTripsForLockingPerTrx);
+					System.out
+							.println("Average nb of Network round trips for locking per trx: "
+									+ avgNbNetworkRoundTripsForLockingPerTrx);
 					System.out.println("Average Reading time: " + avgReadtime);
 					System.out.println("Average Put Shadow time: " + avgPutShadowTime);
 					System.out.println("Average Put Txn State time: "
@@ -371,7 +393,8 @@ public class TestWALManagerDistTxn {
 							+ avgFirstPutTxnStateTime);
 					System.out.println("Average Second Put Txn State time: "
 							+ avgSecondPutTxnStateTime);
-					System.out.println("Average Lock Migration time: " + avgLockMigrationTime);
+					System.out.println("Average Lock Migration time: "
+							+ avgLockMigrationTime);
 					System.out.println("Average Locking time: " + avgLockingTime);
 					System.out.println("Average Version Check time: "
 							+ avgVersionCheckTime);

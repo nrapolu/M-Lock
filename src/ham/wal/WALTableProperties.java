@@ -29,18 +29,23 @@ public class WALTableProperties {
 	public final static long GENERIC_TIMESTAMP = 1;
 
 	public final static byte[] dataTableName = Bytes.toBytes("DATA_TABLE");
-	//final static byte[] walTableName = Bytes.toBytes(WAL_TABLENAME);
+	// final static byte[] walTableName = Bytes.toBytes(WAL_TABLENAME);
 	public final static byte[] walTableName = Bytes.toBytes("DATA_TABLE");
 	public final static byte[] dataFamily = Bytes.toBytes("DATA_FAMILY");
 	public final static byte[] dataColumn = Bytes.toBytes("DATA_COLUMN");
 	public final static byte[] versionColumn = Bytes.toBytes("VERSION_COLUMN");
-	public final static byte[] writeLockColumn = Bytes.toBytes("WRITE_LOCK_COLUMN");
+	public final static byte[] writeLockColumn = Bytes
+			.toBytes("WRITE_LOCK_COLUMN");
 	public final static byte[] blobColumn = Bytes.toBytes("BLOB_COLUMN");
-	public final static byte[] isLockMigratedColumn = Bytes.toBytes("IS_LOCK_MIGRATED");
-	public final static byte[] isLockPlacedOrMigratedColumn = Bytes.toBytes("IS_LOCK_PLACED_OR_MIGRATED");
-	public final static byte[] destinationKeyColumn = Bytes.toBytes("DESTINATION_KEY");
-	
-	public final static byte[] regionObserverMarkerColumn = Bytes.toBytes("GO_THROUGH_REGION_OBSERVER");
+	public final static byte[] isLockMigratedColumn = Bytes
+			.toBytes("IS_LOCK_MIGRATED");
+	public final static byte[] isLockPlacedOrMigratedColumn = Bytes
+			.toBytes("IS_LOCK_PLACED_OR_MIGRATED");
+	public final static byte[] destinationKeyColumn = Bytes
+			.toBytes("DESTINATION_KEY");
+
+	public final static byte[] regionObserverMarkerColumn = Bytes
+			.toBytes("GO_THROUGH_REGION_OBSERVER");
 	public byte[] logFamily = WALTableProperties.WAL_FAMILY;
 	public static long appTimestamp = GENERIC_TIMESTAMP;
 
@@ -54,7 +59,7 @@ public class WALTableProperties {
 	final static int BLOB_SIZE = 100;
 	static String logAndKeySeparator = "#";
 	static String shadowKeySeparator = "^";
-	
+
 	Configuration conf = null;
 	HBaseAdmin admin = null;
 
@@ -63,8 +68,9 @@ public class WALTableProperties {
 		this.admin = admin;
 	}
 
-	public WALTableProperties() {}
-	
+	public WALTableProperties() {
+	}
+
 	public void createAndPopulateTable(long numEntries, long numSplits)
 			throws IOException {
 		// Lets assume the numSplits will give the number of warehouses in the
@@ -82,8 +88,8 @@ public class WALTableProperties {
 		// prefix.
 		// The walTable may also be split using the warehouse-id
 		List<byte[]> splitKeys = new ArrayList<byte[]>();
-		if (numSplits <=11 && numSplits > 1) {
-			for (int i = 1; i <= numSplits-2; i++) {
+		if (numSplits <= 11 && numSplits > 1) {
+			for (int i = 1; i <= numSplits - 2; i++) {
 				splitKeys.add(Bytes.toBytes(new Integer(i).toString()));
 			}
 			// ASCII character just after 9 is ":".
@@ -95,14 +101,15 @@ public class WALTableProperties {
 				splitKeys.add(Bytes.toBytes(baseStr + ":"));
 			}
 			splitKeys.add(Bytes.toBytes(":"));
-		}	else if (numSplits == 20) {
-			// We need the following splits 10000000, 1:, 25, 2:, 35, 3:, ..., 85, 8:, 95, 9:, :
+		} else if (numSplits == 20) {
+			// We need the following splits 10000000, 1:, 25, 2:, 35, 3:, ..., 85, 8:,
+			// 95, 9:, :
 			splitKeys.add(Bytes.toBytes("10000000"));
 			for (int i = 1; i <= 9; i++) {
 				String baseStr = new Integer(i).toString();
-				if (i != 1) 
+				if (i != 1)
 					splitKeys.add(Bytes.toBytes(baseStr + "5"));
-				//if (i != 9)
+				// if (i != 9)
 				splitKeys.add(Bytes.toBytes(baseStr + ":"));
 			}
 			splitKeys.add(Bytes.toBytes(":"));
@@ -113,13 +120,13 @@ public class WALTableProperties {
 		dataFamilyDesc.setMaxVersions(1);
 		dataTableDesc.addFamily(dataFamilyDesc);
 
-		// Since we merged the two tables, logFamily should also be present in 
+		// Since we merged the two tables, logFamily should also be present in
 		// data table.
 		HColumnDescriptor logFamilyDesc = new HColumnDescriptor(logFamily);
 		logFamilyDesc.setMaxVersions(Integer.MAX_VALUE);
 		logFamilyDesc.setInMemory(true);
 		dataTableDesc.addFamily(logFamilyDesc);
-		
+
 		if (admin.tableExists(dataTableName)) {
 			if (admin.isTableEnabled(dataTableName)) {
 				admin.disableTable(dataTableName);
@@ -133,26 +140,20 @@ public class WALTableProperties {
 
 		// As the two tables are merged, we don't delete this table.
 		/*
-		HTableDescriptor logTableDesc = new HTableDescriptor(walTableName);
-		HColumnDescriptor logFamilyDesc = new HColumnDescriptor(logFamily);
-		logFamilyDesc.setMaxVersions(Integer.MAX_VALUE);
-		logFamilyDesc.setInMemory(true);
-		logTableDesc.addFamily(logFamilyDesc);
-
-		// testTableDesc.addFamily(new HColumnDescriptor(placementFamily));
-		// testTableDesc.addFamily(new HColumnDescriptor(isPutFamily));
-		// testTableDesc.addFamily(new HColumnDescriptor(isGetFamily));
-		if (admin.tableExists(walTableName)) {
-			if (admin.isTableEnabled(walTableName)) {
-				admin.disableTable(walTableName);
-			}
-			admin.deleteTable(walTableName);
-		}
-		if (!splitKeys.isEmpty())
-			admin.createTable(logTableDesc, splitKeys.toArray(new byte[0][0]));
-		else
-			admin.createTable(logTableDesc);
-		*/
+		 * HTableDescriptor logTableDesc = new HTableDescriptor(walTableName);
+		 * HColumnDescriptor logFamilyDesc = new HColumnDescriptor(logFamily);
+		 * logFamilyDesc.setMaxVersions(Integer.MAX_VALUE);
+		 * logFamilyDesc.setInMemory(true); logTableDesc.addFamily(logFamilyDesc);
+		 * 
+		 * // testTableDesc.addFamily(new HColumnDescriptor(placementFamily)); //
+		 * testTableDesc.addFamily(new HColumnDescriptor(isPutFamily)); //
+		 * testTableDesc.addFamily(new HColumnDescriptor(isGetFamily)); if
+		 * (admin.tableExists(walTableName)) { if
+		 * (admin.isTableEnabled(walTableName)) { admin.disableTable(walTableName);
+		 * } admin.deleteTable(walTableName); } if (!splitKeys.isEmpty())
+		 * admin.createTable(logTableDesc, splitKeys.toArray(new byte[0][0])); else
+		 * admin.createTable(logTableDesc);
+		 */
 
 		// Create and initialize the HBaseBackedTransactionLogger to store the
 		// DistTxnMetadata
@@ -171,7 +172,8 @@ public class WALTableProperties {
 			Put p = new Put(Bytes.toBytes(Long.toString(i)));
 			p.add(dataFamily, dataColumn, appTimestamp, Bytes.toBytes(Long
 					.toString(0)));
-			p.add(dataFamily, versionColumn, appTimestamp, Bytes.toBytes(Long.toString(zero)));
+			p.add(dataFamily, versionColumn, appTimestamp, Bytes.toBytes(Long
+					.toString(zero)));
 			p.add(dataFamily, writeLockColumn, appTimestamp, Bytes.toBytes(zero));
 			if (writeBlob) {
 				p.add(dataFamily, blobColumn, appTimestamp, blob);
@@ -214,8 +216,8 @@ public class WALTableProperties {
 					WALTableProperties.isLockPlacedOrMigratedColumn,
 					WALTableProperties.appTimestamp, Bytes
 							.toBytes(WALTableProperties.zero));
-			p.add(WAL_FAMILY, versionColumn, appTimestamp, 
-					Bytes.toBytes(Long.toString(zero)));
+			p.add(WAL_FAMILY, versionColumn, appTimestamp, Bytes.toBytes(Long
+					.toString(zero)));
 			p.setWriteToWAL(false);
 			logTable.put(p);
 		}
@@ -244,7 +246,8 @@ public class WALTableProperties {
 		// For now, we are assuming the key to contain the logId. They will be
 		// separated
 		// by the logIdDelimiter.
-		String[] splits = Bytes.toString(key).split("[" + logAndKeySeparator + "]+");
+		String[] splits = Bytes.toString(key)
+				.split("[" + logAndKeySeparator + "]+");
 		LogId logId = new LogId();
 		logId.setKey(Bytes.toBytes(splits[0]));
 		logId.setName(walTableName);
