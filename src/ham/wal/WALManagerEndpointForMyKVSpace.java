@@ -83,7 +83,7 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 	private boolean stopped = false;
 
 	public static void sysout(String otp) {
-		//System.out.println(otp);
+		// System.out.println(otp);
 	}
 
 	@Override
@@ -570,6 +570,12 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 					sysout("ONLY DELETING KEY: "
 							+ Bytes.toString(toBeUnlockedDestKey.get()));
 					Delete delDest = new Delete(toBeUnlockedDestKey.get());
+					// Since the unlocking and reseting at H-WAL and M-WAL are ideally
+					// done by an asynchronous
+					// thread, we setWriteToWAL as false. This will partly remove the
+					// asynchronous thread latency
+					// from the commit operation.
+					delDest.setWriteToWAL(false);
 					delDest.deleteColumn(WALTableProperties.WAL_FAMILY,
 							WALTableProperties.writeLockColumn,
 							WALTableProperties.appTimestamp);
@@ -587,6 +593,15 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 					sysout("ONLY UNLOCKING KEY: "
 							+ Bytes.toString(toBeUnlockedDestKey.get()));
 					Put p = new Put(toBeUnlockedDestKey.get());
+					// Since the unlocking and reseting at H-WAL and M-WAL are ideally
+					// done by an asynchronous
+					// thread, we setWriteToWAL as false. This will partly remove the
+					// asynchronous thread latency
+					// from the commit operation. Furthermore, in case of H-WAL, all
+					// walEdits must be combined
+					// and logged as one. We need to merge the unlocking WALEdits with
+					// those of data-updates.
+					p.setWriteToWAL(false);
 					p.add(WALTableProperties.WAL_FAMILY,
 							WALTableProperties.writeLockColumn,
 							WALTableProperties.appTimestamp, Bytes
@@ -608,6 +623,15 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 					sysout("UNLOCKING AND RESETING KEY: "
 							+ Bytes.toString(toBeUnlockedDestKey.get()));
 					Put pSrc = new Put(toBeUnlockedDestKey.get());
+					// Since the unlocking and reseting at H-WAL and M-WAL are ideally
+					// done by an asynchronous
+					// thread, we setWriteToWAL as false. This will partly remove the
+					// asynchronous thread latency
+					// from the commit operation. Furthermore, in case of H-WAL, all
+					// walEdits must be combined
+					// and logged as one. We need to merge the unlocking WALEdits with
+					// those of data-updates.
+					pSrc.setWriteToWAL(false);
 					pSrc.add(WALTableProperties.WAL_FAMILY,
 							WALTableProperties.writeLockColumn,
 							WALTableProperties.appTimestamp, Bytes
@@ -698,7 +722,7 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 				walEdit, now, htd);
 
 		Map<byte[], Put> putMap = new TreeMap<byte[], Put>(Bytes.BYTES_COMPARATOR);
-		
+
 		for (Write w : logEntry.getWrites()) {
 			String writeName = Bytes.toString(w.getName());
 			String[] tokens = writeName.split("[" + Write.nameDelimiter + "]+");
@@ -716,11 +740,400 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 			p.setWriteToWAL(false);
 			p.add(family, qualifier, WALTableProperties.appTimestamp, value);
 		}
-		
+
 		// Flush the puts in putMap onto the region.
-		for (Put p: putMap.values()) {
+		for (Put p : putMap.values()) {
 			region.put(p, false);
 		}
+	}
+
+	public WALEdit flushLogEntryToLocalRegionInMemory(HRegion region, LogEntry logEntry)
+			throws IOException {
+		WALEdit walEdit = new WALEdit();
+
+		for (Write w : logEntry.getWrites()) {
+			KeyValue kv = new KeyValue(w.getKey(), WALTableProperties.dataFamily, w
+					.getName(), w.getValue());
+			walEdit.add(kv);
+		}
+		// The WALEdit will be accumulated and flushed by the caller.
+		//log.append(region.getRegionInfo(), WALTableProperties.dataTableName,
+		//		walEdit, now, htd);
+
+		Map<byte[], Put> putMap = new TreeMap<byte[], Put>(Bytes.BYTES_COMPARATOR);
+
+		for (Write w : logEntry.getWrites()) {
+			String writeName = Bytes.toString(w.getName());
+			String[] tokens = writeName.split("[" + Write.nameDelimiter + "]+");
+			String tableName = tokens[0];
+			byte[] family = Bytes.toBytes(tokens[1]);
+			byte[] qualifier = Bytes.toBytes(tokens[2]);
+			byte[] key = w.getKey();
+			byte[] value = w.getValue();
+
+			Put p = putMap.get(key);
+			if (p == null) {
+				p = new Put(key);
+				putMap.put(key, p);
+			}
+			p.setWriteToWAL(false);
+			p.add(family, qualifier, WALTableProperties.appTimestamp, value);
+		}
+
+		// Flush the puts in putMap onto the region.
+		for (Put p : putMap.values()) {
+			region.put(p, false);
+		}
+		return walEdit;
+	}
+
+	public boolean commitToMemory(LogId id, Check check, List<Write> writes,
+			List<ImmutableBytesWritable> toBeUnlockedKeys,
+			List<Integer> commitTypeInfo, List<Row> firstSetOfCausalLockReleases,
+			List<Row> secondSetOfCausalLockReleases, List<WALEdit> walEdits) throws IOException {
+		sysout("Committing at logId: " + id.toString());
+		// get the coprocessor environment
+		RegionCoprocessorEnvironment env = (RegionCoprocessorEnvironment) getEnvironment();
+		HRegion region = env.getRegion();
+
+		HashedBytes rowKey = new HashedBytes(id.getKey());
+		CountDownLatch rowLatch = new CountDownLatch(1);
+		final int DEFAULT_ROWLOCK_WAIT_DURATION = 30000;
+
+		// loop until we acquire the row lock (unless !waitForLock)
+		while (true) {
+			CountDownLatch existingLatch = lockedRows.putIfAbsent(rowKey, rowLatch);
+			if (existingLatch == null) {
+				break;
+			} else {
+				// row already locked
+				try {
+					if (!existingLatch.await(DEFAULT_ROWLOCK_WAIT_DURATION,
+							TimeUnit.MILLISECONDS)) {
+						return false;
+					}
+				} catch (InterruptedException ie) {
+					// Empty
+				}
+			}
+		}
+
+		try {
+			// A lock acquired above is similar to the row lock for the row containing
+			// all WAL related info. So, we can now fetch the CURRENT_TS, SYNC_TS, and
+			// OLDEST_TS from the row, without caring for someone else changing them
+			// after
+			// we've read them, as no one else can modify the row's content.
+			// Process the conflict detection check.
+			// Get g = new Get(id.getKey());
+			// g.addColumn(WALTableProperties.WAL_FAMILY,
+			// WALTableProperties.OLDEST_TS_COL);
+			// g.addColumn(WALTableProperties.WAL_FAMILY,
+			// WALTableProperties.CURRENT_TS_COL);
+			// g.setTimeStamp(WALTableProperties.GENERIC_TIMESTAMP);
+			//
+			// Result r = env.getRegion().get(g, null);
+			// long oldestTs = Bytes.toLong(r.getValue(WALTableProperties.WAL_FAMILY,
+			// WALTableProperties.OLDEST_TS_COL));
+			// long currentTs = Bytes.toLong(r.getValue(WALTableProperties.WAL_FAMILY,
+			// WALTableProperties.CURRENT_TS_COL));
+
+			// We get the timestamps from myKVSpace.
+			String key = Bytes.toString(id.getKey())
+					+ Bytes.toString(WALTableProperties.WAL_FAMILY)
+					+ Bytes.toString(WALTableProperties.OLDEST_TS_COL);
+			byte[] val = myKVSpace.get(key).get(WALTableProperties.GENERIC_TIMESTAMP);
+			long oldestTs = Bytes.toLong(val);
+
+			key = Bytes.toString(id.getKey())
+					+ Bytes.toString(WALTableProperties.WAL_FAMILY)
+					+ Bytes.toString(WALTableProperties.CURRENT_TS_COL);
+			val = myKVSpace.get(key).get(WALTableProperties.GENERIC_TIMESTAMP);
+			long currentTs = Bytes.toLong(val);
+
+			// if the oldestTs > check.timestamp, then we return false, as trx is very
+			// old
+			// and we don't have sufficient info to judge its correctness.
+			if (oldestTs > check.getTimestamp())
+				return false;
+
+			// Grab all the LogEntries at timestamps > check.timestamp && <=
+			// currentTs.
+			// Get getLogEntries = new Get(id.getKey());
+			// getLogEntries.addColumn(WALTableProperties.WAL_FAMILY,
+			// WALTableProperties.WAL_ENTRY_COL);
+			// // In timerange, left is inclusive and right is exclusive.
+			// getLogEntries.setTimeRange(check.getTimestamp() + 1, currentTs + 1);
+			// getLogEntries.setMaxVersions();
+			// Result logEntries = env.getRegion().get(getLogEntries, null);
+
+			// if (!logEntries.isEmpty()) {
+			// sysout("IN COMMIT CHECK: checkTimestamp: "
+			// + check.getTimestamp() + ", currentTs: " + currentTs);
+			// sysout("IN COMMIT CHECK: check object contains: "
+			// + check.toString());
+			// }
+
+			// From myKVSpace, grab all the LogEntries at timestamps > check.timestamp
+			// && <=
+			// currentTs.
+			key = Bytes.toString(id.getKey())
+					+ Bytes.toString(WALTableProperties.WAL_FAMILY)
+					+ Bytes.toString(WALTableProperties.WAL_ENTRY_COL);
+			TreeMap<Long, byte[]> timestampMap = myKVSpace.get(key);
+			if (timestampMap != null) {
+				NavigableMap<Long, byte[]> subMap = timestampMap.subMap(check
+						.getTimestamp(), false, currentTs, true);
+
+				if (!subMap.isEmpty()) {
+					sysout("IN COMMIT CHECK: checkTimestamp: " + check.getTimestamp()
+							+ ", currentTs: " + currentTs);
+					sysout("IN COMMIT CHECK: check object contains: " + check.toString());
+				}
+
+				// Check if readSet overlaps with the writes that occurred in the
+				// meantime.
+				// Return false even if one conflict is detected.
+				if (check.getReadSets() != null) {
+					for (Map.Entry<Long, byte[]> entry : subMap.entrySet()) {
+						LogEntry logEntry = LogEntry.fromBytes(entry.getValue());
+						for (ReadSet readSet : check.getReadSets()) {
+							byte[] name = readSet.getName();
+							Set<ImmutableBytesWritable> keySet = readSet.getKeys();
+							if (keySet != null) {
+								for (Write w : logEntry.getWrites()) {
+									if (Bytes.compareTo(name, w.getName()) == 0
+											&& keySet
+													.contains(new ImmutableBytesWritable(w.getKey()))) {
+										return false;
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			// // Check if readSet overlaps with the writes that occurred in the
+			// // meantime.
+			// // Return false even if one conflict is detected.
+			// for (KeyValue kv : logEntries.raw()) {
+			// LogEntry logEntry = LogEntry.fromBytes(kv.getValue());
+			// if (check.getReadSets() != null) {
+			// for (ReadSet readSet : check.getReadSets()) {
+			// byte[] name = readSet.getName();
+			// Set<ImmutableBytesWritable> keySet = readSet.getKeys();
+			// if (keySet != null) {
+			// for (Write w : logEntry.getWrites()) {
+			// if (Bytes.compareTo(name, w.getName()) == 0
+			// && keySet.contains(new ImmutableBytesWritable(w.getKey()))) {
+			// return false;
+			// }
+			// }
+			// }
+			// }
+			// }
+			// }
+
+			// If all checks passed, commit the LogEntry, and also the update the
+			// other
+			// timestamp fields.
+			// Increase the currentTs for every commit.
+			currentTs++;
+			LogEntry newLogEntry = new LogEntry();
+			newLogEntry.setTimestamp(currentTs);
+			sysout("Adding the following writes to the log entry at timestamp: "
+					+ currentTs);
+			for (Write w : writes)
+				sysout(w.toString());
+
+			newLogEntry.setWrites(writes);
+
+			// First persisting to Write-ahead-log of HBase and then writing to
+			// myKVSpace.
+			// Once we move to a consistent hashing style mechanism, we
+			// should switch
+			// to the "writing to slaves" mechanism for persistance.
+			// TODO: This WALEdit should also contain all the information related to
+			// "Causal Lock Updates";
+			// they are supposed to be first committed onto the local WAL and then
+			// flushed onto the
+			// remote WALs.
+			WALEdit walEdit = new WALEdit();
+			long now = EnvironmentEdgeManager.currentTimeMillis();
+			HLog log = env.getRegion().getLog();
+			HTableDescriptor htd = new HTableDescriptor(
+					WALTableProperties.dataTableName);
+
+			for (Write w : writes) {
+				KeyValue kv = new KeyValue(w.getKey(), WALTableProperties.dataFamily, w
+						.getName(), w.getValue());
+				walEdit.add(kv);
+			}
+
+			// Returning the WALEdit, it will be combined and flushed by the caller.
+			walEdits.add(walEdit);
+			// log.append(env.getRegion().getRegionInfo(),
+			// WALTableProperties.dataTableName, walEdit, now, htd);
+
+			// Put commitPut = new Put(id.getKey());
+			// commitPut.add(WALTableProperties.WAL_FAMILY,
+			// WALTableProperties.CURRENT_TS_COL,
+			// WALTableProperties.GENERIC_TIMESTAMP, Bytes.toBytes(currentTs));
+			// commitPut.add(WALTableProperties.WAL_FAMILY,
+			// WALTableProperties.WAL_ENTRY_COL, currentTs, newLogEntry.toBytes());
+			// env.getRegion().put(commitPut);
+
+			// Writing to myKVSpace instead of HBase.
+			// Each HBase key with its family and column will become one key for
+			// myKVSpace.
+			key = Bytes.toString(id.getKey())
+					+ Bytes.toString(WALTableProperties.WAL_FAMILY)
+					+ Bytes.toString(WALTableProperties.CURRENT_TS_COL);
+			val = Bytes.toBytes(currentTs);
+			timestampMap = myKVSpace.get(key);
+			if (timestampMap == null) {
+				timestampMap = new TreeMap<Long, byte[]>();
+				myKVSpace.put(key, timestampMap);
+			}
+			timestampMap.put(WALTableProperties.GENERIC_TIMESTAMP, val);
+
+			// next key,family,col,value
+			key = Bytes.toString(id.getKey())
+					+ Bytes.toString(WALTableProperties.WAL_FAMILY)
+					+ Bytes.toString(WALTableProperties.WAL_ENTRY_COL);
+			val = newLogEntry.toBytes();
+			timestampMap = myKVSpace.get(key);
+			if (timestampMap == null) {
+				timestampMap = new TreeMap<Long, byte[]>();
+				myKVSpace.put(key, timestampMap);
+			}
+			timestampMap.put(currentTs, val);
+
+			// Flush these writes onto the local region, since we assume that data
+			// items under a write-ahead-log
+			// are placed in the same region hosting the WAL.
+			WALEdit logEntryWalEdit = flushLogEntryToLocalRegionInMemory(region, newLogEntry);
+			walEdits.add(logEntryWalEdit);
+
+			// All unlocking and reseting goes into the first set.
+			// All deletes for remote, migrated locks go into the second set.
+			for (int index = 0; index < toBeUnlockedKeys.size(); index++) {
+				// For every key, check the corresponding commitType in commitTypeInfo
+				// list,
+				// and perform the action accordingly.
+				ImmutableBytesWritable toBeUnlockedDestKey = toBeUnlockedKeys
+						.get(index);
+				if (commitTypeInfo.get(index) == LogId.ONLY_DELETE) {
+					sysout("ONLY DELETING KEY: "
+							+ Bytes.toString(toBeUnlockedDestKey.get()));
+					Delete delDest = new Delete(toBeUnlockedDestKey.get());
+					// Since the unlocking and reseting at H-WAL and M-WAL are ideally
+					// done by an asynchronous
+					// thread, we setWriteToWAL as false. This will partly remove the
+					// asynchronous thread latency
+					// from the commit operation.
+					delDest.setWriteToWAL(false);
+					delDest.deleteColumn(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.writeLockColumn,
+							WALTableProperties.appTimestamp);
+					delDest.deleteColumn(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.isLockMigratedColumn,
+							WALTableProperties.appTimestamp);
+					delDest.deleteColumn(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.isLockPlacedOrMigratedColumn,
+							WALTableProperties.appTimestamp);
+					delDest.deleteColumn(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.regionObserverMarkerColumn,
+							WALTableProperties.appTimestamp);
+					secondSetOfCausalLockReleases.add(delDest);
+				} else if (commitTypeInfo.get(index) == LogId.ONLY_UNLOCK) {
+					sysout("ONLY UNLOCKING KEY: "
+							+ Bytes.toString(toBeUnlockedDestKey.get()));
+					Put p = new Put(toBeUnlockedDestKey.get());
+					// Since the unlocking and reseting at H-WAL and M-WAL are ideally
+					// done by an asynchronous
+					// thread, we setWriteToWAL as false. This will partly remove the
+					// asynchronous thread latency
+					// from the commit operation. Furthermore, in case of H-WAL, all
+					// walEdits must be combined
+					// and logged as one. We need to merge the unlocking WALEdits with
+					// those of data-updates.
+					p.setWriteToWAL(false);
+					p.add(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.writeLockColumn,
+							WALTableProperties.appTimestamp, Bytes
+									.toBytes(WALTableProperties.zero));
+					p.add(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.isLockPlacedOrMigratedColumn,
+							WALTableProperties.appTimestamp, Bytes
+									.toBytes(WALTableProperties.zero));
+					p.add(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.regionObserverMarkerColumn,
+							WALTableProperties.appTimestamp, WALTableProperties.randomValue);
+					firstSetOfCausalLockReleases.add(p);
+				} else if (commitTypeInfo.get(index) == LogId.UNLOCK_AND_RESET_MIGRATION) {
+					sysout("UNLOCKING AND RESETING KEY: "
+							+ Bytes.toString(toBeUnlockedDestKey.get()));
+					Put pSrc = new Put(toBeUnlockedDestKey.get());
+					// Since the unlocking and reseting at H-WAL and M-WAL are ideally
+					// done by an asynchronous
+					// thread, we setWriteToWAL as false. This will partly remove the
+					// asynchronous thread latency
+					// from the commit operation. Furthermore, in case of H-WAL, all
+					// walEdits must be combined
+					// and logged as one. We need to merge the unlocking WALEdits with
+					// those of data-updates.
+					pSrc.setWriteToWAL(false);
+					pSrc.add(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.writeLockColumn,
+							WALTableProperties.appTimestamp, Bytes
+									.toBytes(WALTableProperties.zero));
+					pSrc.add(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.isLockMigratedColumn,
+							WALTableProperties.appTimestamp, Bytes
+									.toBytes(WALTableProperties.zero));
+					pSrc.add(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.isLockPlacedOrMigratedColumn,
+							WALTableProperties.appTimestamp, Bytes
+									.toBytes(WALTableProperties.zero));
+					pSrc.add(WALTableProperties.WAL_FAMILY,
+							WALTableProperties.regionObserverMarkerColumn,
+							WALTableProperties.appTimestamp, WALTableProperties.randomValue);
+					firstSetOfCausalLockReleases.add(pSrc);
+				}
+			}
+
+			// Since we performed our own log flush, change the syncTs to the
+			// currentTs.
+			// This will indirectly make the start() function return an empty snapshot
+			// whenever
+			// someone requests it. Another way is to delete the LogEntry from
+			// myKVSpace, but we
+			// won't do that as the LogEntry is useful in detecting conflicts during
+			// commit.
+			key = Bytes.toString(id.getKey())
+					+ Bytes.toString(WALTableProperties.WAL_FAMILY)
+					+ Bytes.toString(WALTableProperties.SYNC_TS_COL);
+			val = Bytes.toBytes(currentTs);
+			timestampMap = myKVSpace.get(key);
+			if (timestampMap == null) {
+				timestampMap = new TreeMap<Long, byte[]>();
+				myKVSpace.put(key, timestampMap);
+			}
+			timestampMap.put(WALTableProperties.GENERIC_TIMESTAMP, val);
+		} catch (Exception e) {
+			System.err.println("Error in commit function: " + e.getMessage());
+			e.printStackTrace();
+		} finally {
+			// Give up the lock on the wal.
+			// Latches are one-time gates. So we have to open the gate to release the
+			// waiting
+			// prisoners and then purge the gate completely.
+			// New guy wanting the lock will install another gate.
+			CountDownLatch internalRowLatch = lockedRows.remove(rowKey);
+			internalRowLatch.countDown();
+		}
+		return true;
 	}
 
 	public void flushLogs() throws IOException {
@@ -870,7 +1283,7 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 
 	// The localKey (logId along with key) is locked when indirection is being
 	// placed
-	// or it is being locked. Thus indirection is attempted in the first place
+	// or it is being locked. Thus indirection is attempted
 	// only if there is no lock.
 	public ImmutableBytesWritable migrateLock(final Long transactionId,
 			final LogId logId, final ImmutableBytesWritable key,
@@ -988,6 +1401,14 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 			// Basically, this whole function can be written as a pure HTable based
 			// migration.
 			p = new Put(tableCachedLock);
+			// TODO: For now, we are disabling the writeToWAL for updating
+			// tableCachedLock with
+			// indirection information (see that we've put a false in checkAndMutate()
+			// function.
+			// Once this function is refactored, we'll have to accumulate walEdits for
+			// all
+			// local lock modifications and log them as one.
+			p.setWriteToWAL(false);
 			p.add(WALTableProperties.WAL_FAMILY, WALTableProperties.writeLockColumn,
 					WALTableProperties.appTimestamp, Bytes.toBytes(transactionId));
 			p.add(WALTableProperties.WAL_FAMILY,
@@ -1009,7 +1430,7 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 						WALTableProperties.WAL_FAMILY,
 						WALTableProperties.isLockPlacedOrMigratedColumn,
 						CompareFilter.CompareOp.EQUAL, new BinaryComparator(Bytes
-								.toBytes(WALTableProperties.zero)), p, null, true);
+								.toBytes(WALTableProperties.zero)), p, null, false);
 				sysout("For tableCachedLock: " + Bytes.toString(tableCachedLock)
 						+ ", CheckAndMutate succeeded and so we placed the migration info ");
 			} else {
@@ -1093,9 +1514,6 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 							WALTableProperties.WAL_FAMILY,
 							WALTableProperties.isLockMigratedColumn));
 
-					long lockInfo = Bytes.toLong(r
-							.getValue(WALTableProperties.WAL_FAMILY,
-									WALTableProperties.writeLockColumn));
 					if (isLockMigratedColumnInfo == WALTableProperties.one) {
 						// Some other transaction placed a migration.
 						existingDestinationKey = r.getValue(WALTableProperties.WAL_FAMILY,

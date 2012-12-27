@@ -55,7 +55,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 	}
 
 	public static void sysout(long trxId, String otp) {
-		//System.out.println(trxId + " : " + otp);
+		// System.out.println(trxId + " : " + otp);
 	}
 
 	public DistTxnState beginTransaction() throws IOException {
@@ -90,7 +90,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		return result;
 	}
 
-	public List<Result> get(final HTable logTable, final HTable dataTable,
+	public List<Result> getWithClientSideMerge(final HTable logTable, final HTable dataTable,
 			final DistTxnState transactionState, final List<Get> gets,
 			boolean shouldMigrateLocks) throws Throwable {
 		long trxId = transactionState.getTransactionId();
@@ -323,244 +323,12 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		return results;
 	}
 
-	public List<Result> getInParallel(final HTable logTable,
+	public List<Result> get(final HTable logTable,
 			final HTable dataTable, final DistTxnState transactionState,
-			final List<Get> gets, boolean shouldMigrateLocks) throws Throwable {
-		long trxId = transactionState.getTransactionId();
-		// First we check if the object to be read is already present in cache. If
-		// so, we
-		// just return that object. However, only dumb applications would do a Get
-		// for a row that they've already read or written. Fortunately, we don't
-		// write
-		// dumb applications.
-		// From the List<Get>, we find out the logIds they correspond to and form
-		// their
-		// list.
-		TreeMap<LogId, List<Get>> logIdToGetMap = new TreeMap<LogId, List<Get>>(
-				new DistTxnState.LogIdComparator());
-		// We assume that in the list of Get requests sent to this function, no two
-		// of them
-		// are for the same row.
-		HashMap<ImmutableBytesWritable, Integer> getRowToIndexMap = new HashMap<ImmutableBytesWritable, Integer>();
-		// The list to be sent to LockMigrator
-		List<byte[]> lockSet = new LinkedList<byte[]>();
-		for (int index = 0; index < gets.size(); index++) {
-			Get g = gets.get(index);
-			LogId logId = WALTableProperties.getLogIdForKey(g.getRow());
-			sysout(trxId, "For row: " + Bytes.toString(g.getRow()) + ", logId is: "
-					+ logId.toString());
-			List<Get> getList = logIdToGetMap.get(logId);
-			if (getList == null) {
-				getList = new LinkedList<Get>();
-				logIdToGetMap.put(logId, getList);
-			}
-			getList.add(g);
-			lockSet.add(g.getRow());
-			getRowToIndexMap.put(new ImmutableBytesWritable(g.getRow()), index);
-		}
-
-		// Initiate LockMigrator and put it in the pool.
-		// TODO: We should make this a global variable, as it will be used several
-		// times.
-		// Also, we should initiate this client with some random unique id. Send
-		// that id
-		// as the key for the destination LogId where the keys should be placed.
-		if (shouldMigrateLocks) {
-			LockMigrator lockMigrator = new LockMigrator(logTable.getConfiguration(),
-					transactionState.getTransactionId());
-			lockMigrator.addLockSetToMigrate(lockSet);
-			Future future = pool.submit(lockMigrator);
-			futures.add(future);
-			startTimeForMigration = System.currentTimeMillis();
-		}
-
-		final List<LogId> logIdList = new LinkedList<LogId>();
-		for (Map.Entry<LogId, List<Get>> entry : logIdToGetMap.entrySet()) {
-			logIdList.add(entry.getKey());
-		}
-
-		class GetSnapshotCallBack implements Batch.Callback<List<Snapshot>> {
-			private List<Snapshot> snapshots;
-
-			List<Snapshot> getSnapshots() {
-				return snapshots;
-			}
-
-			@Override
-			public synchronized void update(byte[] region, byte[] row,
-					List<Snapshot> result) {
-				// This call goes to multiple regions. Each returns the list of same
-				// size (equal to the size of logIdList argument. However, only some of
-				// the list elements will have values (others would be "null").
-				// We collect the non-null elements and place them in this class's
-				// "snapshots" list at the same position.
-				if (this.snapshots == null) {
-					this.snapshots = new ArrayList<Snapshot>(result.size());
-					for (int i = 0; i < result.size(); i++)
-						snapshots.add(i, null);
-				}
-
-				for (int i = 0; i < result.size(); i++) {
-					Snapshot snapshot = result.get(i);
-					if (snapshot != null && snapshot.getTimestamp() >= 0) {
-						this.snapshots.set(i, snapshot);
-						// System.out.println("In GetSnapshotCallBack, at index: " + i +
-						// " adding snapshot: "
-						// + snapshot.toString());
-					}
-				}
-			}
-		}
-
-		class TableGetsCall implements Callable<Object[]> {
-			HTable localDataTable = null;
-			List<Get> gets = null;
-
-			TableGetsCall(HTable dataTable, List<Get> gets) {
-				this.localDataTable = dataTable;
-				this.gets = gets;
-			}
-
-			@Override
-			public Object[] call() throws Exception {
-				// TODO Auto-generated method stub
-				return localDataTable.batch(gets);
-			}
-		}
-
-		// We issue the Gets for all the keys from the table in another thread.
-		// In the main thread, we get the snapshots from WALs. Later, these two are
-		// merged
-		// picking the one from snapshot wherever a common key is found.
-		// Ideally, we'll have to push this merging business to the server-side.
-		// After reading
-		// the snapshot, the server-side get should fetch the values from table
-		// (either present
-		// on the local node, as is the case for entity-groups, or fetch from a
-		// remote node, as
-		// is the case for micro-shards.
-		// For now, we do this parallel fetch (which has the correctness issue),
-		// since we don't
-		// flush our snapshots. Also, the merge function which we write can be
-		// clearly copied to
-		// the server side.
-		TableGetsCall tableGets = new TableGetsCall(dataTable, gets);
-		Future<Object[]> futureFromTable = pool.submit(tableGets);
-
-		// Issue reads from snapshots (write-ahead-logs).
-		LogId firstLogId = logIdToGetMap.firstKey();
-		// System.out.println("First logId: " + firstLogId.toString());
-		LogId lastLogId = logIdToGetMap.lastKey();
-		// System.out.println("Last logId: " + lastLogId.toString());
-		GetSnapshotCallBack aGetSnapshotCallBack = new GetSnapshotCallBack();
-		logTable.coprocessorExec(WALManagerDistTxnProtocol.class, firstLogId
-				.getKey(), lastLogId.getKey(),
-				new Batch.Call<WALManagerDistTxnProtocol, List<Snapshot>>() {
-					@Override
-					public List<Snapshot> call(WALManagerDistTxnProtocol instance)
-							throws IOException {
-						// We don't need to send the actual list of Gets. The function can
-						// return the entire Snapshot for the logId, and then we can sieve
-						// through
-						// them later to obtain results for our gets.
-						return instance.getSnapshotsForLogIds(logIdList);
-					}
-				}, aGetSnapshotCallBack);
-
-		// From the snapshots obtained, check which gets can be satisfied. For the
-		// rest, we'll
-		// have to go to the store to fetch their results. Even inside a single Get,
-		// there could
-		// be multiple columns being requested. FOr these, we'll have to
-		// individually search in
-		// the snapshot, as they would be present as different Write objects.
-		List<Result> results = new ArrayList<Result>(gets.size());
-		List<List<KeyValue>> resultKvs = new ArrayList<List<KeyValue>>();
-		// Fill the results with nulls as the placement into it will be random.
-		sysout(trxId, "Gets size: " + gets.size());
-		for (Get g : gets) {
-			sysout(trxId, "About to fetch Get: " + g.toString());
-		}
-
-		for (int i = 0; i < gets.size(); i++)
-			results.add(i, null);
-		for (int i = 0; i < gets.size(); i++)
-			resultKvs.add(i, null);
-
-		List<Snapshot> snapshots = aGetSnapshotCallBack.getSnapshots();
-		Object[] resultsFromStore = futureFromTable.get();
-
-		for (int logIdIndex = 0; logIdIndex < logIdList.size(); logIdIndex++) {
-			LogId logId = logIdList.get(logIdIndex);
-			List<Get> getList = logIdToGetMap.get(logId);
-			Snapshot snapshot = snapshots.get(logIdIndex);
-			Map<String, Write> snapshotWriteMap = snapshot.getWriteMap();
-			// For now, we only consider the Get to be requesting dataName
-			// (dataColumn),
-			// versionName (versionColumn), and writeLockName (writeLockColumn).
-			for (Get g : getList) {
-				// Get the index of this Get
-				int getIndex = getRowToIndexMap.get(new ImmutableBytesWritable(g
-						.getRow()));
-				Result resultFromStore = (Result) resultsFromStore[getIndex];
-				List<KeyValue> kvs = new ArrayList<KeyValue>();
-				for (byte[] column : g.getFamilyMap().get(dataFamily)) {
-					byte[] dataName = Bytes.toBytes(Bytes
-							.toString(WALTableProperties.dataTableName)
-							+ Write.nameDelimiter
-							+ Bytes.toString(WALTableProperties.dataFamily)
-							+ Write.nameDelimiter + Bytes.toString(column));
-					Write dataWriteFromSnapshot = snapshotWriteMap.get(Write
-							.getNameAndKey(dataName, g.getRow()));
-					if (dataWriteFromSnapshot != null) {
-						KeyValue kv = new KeyValue(g.getRow(), dataFamily, column,
-								dataWriteFromSnapshot.getValue());
-						kvs.add(kv);
-					} else {
-						// Since its not found in the snapshot, we take it from store's
-						// result.
-						kvs.addAll(resultFromStore.getColumn(dataFamily, column));
-					}
-				}
-				// Push the kvs for this Get into the resultKvs. This Get request
-				// might not
-				// have been satisfied through the snapshot. Thus, we wait until all
-				// the kvs have
-				// been fetched and then create the Result object eventually.
-				resultKvs.set(getIndex, kvs);
-			}
-		}
-
-		// Now that resultKvs has been filled up, create individual Result objects
-		// with
-		// its corresponding kv list.
-		for (int i = 0; i < gets.size(); i++) {
-			List<KeyValue> kvs = resultKvs.get(i);
-			if (kvs == null || kvs.isEmpty())
-				sysout(trxId, "Empty kvs for row: " + gets.get(i).toString());
-			Result finalResult = new Result(kvs);
-			results.set(i, finalResult);
-		}
-
-		// For all results, store the version number of the read result in
-		// DistTxnMetadata's
-		// getWithVersionList
-		for (int i = 0; i < results.size(); i++) {
-			Result r = results.get(i);
-			// System.out.println("Examining result at index: " + i);
-			long version = 0;
-			try {
-				version = WALTableProperties.getVersion(r);
-			} catch (Exception e) {
-				sysout(trxId, "Exception for row: " + Bytes.toString(r.getRow()));
-				e.printStackTrace();
-			}
-			transactionState.addReadInfoToDistTxnMetadata(new ImmutableBytesWritable(
-					r.getRow()), version);
-		}
-		return results;
+			final List<Get> gets) throws Throwable {
+		return getWithServerSideMerge(logTable, dataTable, transactionState, gets);
 	}
-
+		
 	public List<Result> getWithServerSideMerge(final HTable logTable,
 			final HTable dataTable, final DistTxnState transactionState,
 			final List<Get> gets) throws Throwable {
@@ -642,12 +410,22 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 
 		// Issue reads from snapshots (write-ahead-logs).
 		LogId firstLogId = logIdToGetMap.firstKey();
-		// System.out.println("First logId: " + firstLogId.toString());
 		LogId lastLogId = logIdToGetMap.lastKey();
-		// System.out.println("Last logId: " + lastLogId.toString());
+
+		// Swap first and lastLogId if the later is less than the former. This can
+		// happen when the
+		// contentionOrder is changed by the user. Our use of the first and last is
+		// to have bounds
+		// on the regions, nothing more.
+		if (LogId.compareOnlyKey(firstLogId, lastLogId) > 0) {
+			LogId tmp = firstLogId;
+			firstLogId = lastLogId;
+			lastLogId = tmp;
+		}
+
 		GetWithServerSideMergeCallBack aGetWithServerSideMergeCallBack = new GetWithServerSideMergeCallBack();
-		logTable.coprocessorExec(WALManagerDistTxnProtocol.class,
-				HConstants.EMPTY_START_ROW, HConstants.EMPTY_END_ROW,
+		logTable.coprocessorExec(WALManagerDistTxnProtocol.class, firstLogId
+				.getKey(), lastLogId.getKey(),
 				new Batch.Call<WALManagerDistTxnProtocol, List<List<Result>>>() {
 					@Override
 					public List<List<Result>> call(WALManagerDistTxnProtocol instance)
@@ -1484,38 +1262,13 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		return nbUnsuccessfulAttempts;
 	}
 
-	boolean commitRequestCheckVersions(final HTable table,
-			final DistTxnState transactionState) throws IOException,
-			InterruptedException {
-		long trxId = transactionState.getTransactionId();
-		List<Pair<ImmutableBytesWritable, Long>> readVersionList = transactionState
-				.getReadVersionList();
-		List<Get> actions = new LinkedList<Get>();
-		for (Pair<ImmutableBytesWritable, Long> readWithVersion : readVersionList) {
-			ImmutableBytesWritable key = readWithVersion.getFirst();
-			Get g = new Get(key.get());
-			g.addColumn(dataFamily, versionColumn);
-			actions.add(g);
-		}
-
-		Object[] results = table.batch(actions);
-		boolean isFresh = true;
-		for (int i = 0; i < results.length; i++) {
-			long presentVersion = Bytes.toLong(((Result) results[i]).getValue(
-					dataFamily, versionColumn));
-			long cacheVersion = readVersionList.get(i).getSecond();
-			sysout(trxId, "Present version for key: "
-					+ Bytes.toString(((Result) results[i]).getRow()) + ", is: "
-					+ presentVersion);
-			sysout(trxId, "Cache version is: " + cacheVersion);
-			if (cacheVersion != presentVersion) {
-				isFresh = isFresh && false;
-			}
-		}
-		return isFresh;
+	public boolean commitRequestCheckVersions(final HTable logTable,
+			final HTable dataTable, final DistTxnState transactionState)
+			throws Throwable {
+		return commitRequestCheckVersionsFromWAL(logTable, dataTable, transactionState);
 	}
 
-	boolean commitRequestCheckVersionsFromWAL(final HTable logTable,
+	private boolean commitRequestCheckVersionsFromWAL(final HTable logTable,
 			final HTable dataTable, final DistTxnState transactionState)
 			throws Throwable {
 		final long trxId = transactionState.getTransactionId();
@@ -1930,6 +1683,29 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		final List<LogId> logIdList = new LinkedList<LogId>();
 		final List<List<Put>> allUpdates = new LinkedList<List<Put>>();
 		final List<List<LogId>> toBeUnlockedDestLogIds = new LinkedList<List<LogId>>();
+
+		// Collect the first and last logIds from the writeBuffer. They are used to
+		// limit the number
+		// of regions we send this request to.
+		LogId firstLogId = writeBuffer.firstKey();
+		LogId lastLogId = writeBuffer.lastKey();
+
+		// Swap first and lastLogId if the later is less than the former. This can
+		// happen when the
+		// contentionOrder is changed by the user. Our use of the first and last is
+		// to have bounds
+		// on the regions, nothing more. The ordered traveral which happens in the
+		// next loop takes
+		// care of the contention order.
+		if (LogId.compareOnlyKey(firstLogId, lastLogId) > 0) {
+			LogId tmp = firstLogId;
+			firstLogId = lastLogId;
+			lastLogId = tmp;
+		}
+
+		sysout(trxId, "FIRST LOG ID: " + firstLogId.toString());
+		sysout(trxId, "LAST LOG ID: " + lastLogId.toString());
+
 		// Iterating in the order of LogIds so as to avoid deadlocks.
 		for (Iterator<LogId> logIdItr = writeBuffer.keySet().iterator(); logIdItr
 				.hasNext();) {
@@ -1939,8 +1715,8 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 			final List<Put> updates = new LinkedList<Put>();
 			final List<LogId> destLogIds = new LinkedList<LogId>();
 			for (Action action : actions) {
-				sysout(trxId, "For logId: " + logId.toString() + ", adding key: "
-						+ Bytes.toString(action.getAction().getRow()));
+				sysout(trxId, "To COMMIT, For logId: " + logId.toString()
+						+ ", adding key: " + Bytes.toString(action.getAction().getRow()));
 				updates.add((Put) action.getAction());
 				LogId destLogId = LockMigrator.afterMigrationKeyMap
 						.get(new ImmutableBytesWritable(action.getAction().getRow()));
@@ -1993,8 +1769,8 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		// specify only
 		// particular regions to which the Exec should be sent to.
 		EntityGroupCommitCallBack entityGroupCommitCallBack = new EntityGroupCommitCallBack();
-		table.coprocessorExec(WALManagerDistTxnProtocol.class,
-				HConstants.EMPTY_START_ROW, HConstants.EMPTY_END_ROW,
+		table.coprocessorExec(WALManagerDistTxnProtocol.class, firstLogId.getKey(),
+				lastLogId.getKey(),
 				new Batch.Call<WALManagerDistTxnProtocol, Boolean>() {
 					@Override
 					public Boolean call(WALManagerDistTxnProtocol instance)

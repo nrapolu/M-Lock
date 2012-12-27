@@ -360,7 +360,7 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 			walManagerDistTxnClient.putShadowObjects(logTable, dataTable,
 					transactionState, migrateLocks, inverseWarehouseStr);
 			long endPutShadowTime = System.currentTimeMillis();
-
+			
 			long startPutTxnStateTime = System.currentTimeMillis();
 			walManagerDistTxnClient
 					.putDistTxnState(logTable, transactionState, false);

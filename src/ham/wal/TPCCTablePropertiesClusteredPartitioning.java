@@ -44,16 +44,18 @@ public class TPCCTablePropertiesClusteredPartitioning extends
 		warehouseKeyMap.put(new Long(18), "8518");
 		warehouseKeyMap.put(new Long(19), "9019");
 		warehouseKeyMap.put(new Long(20), "9520");
-		
-		// Fill in the toBePrependedStringForMigratedLocks map. Assumption is that the last
-		// 5 nodes (demarcated by the last 4 split keys) will hold the migrated locks.
+
+		// Fill in the toBePrependedStringForMigratedLocks map. Assumption is that
+		// the last
+		// 5 nodes (demarcated by the last 4 split keys) will hold the migrated
+		// locks.
 		toBePrependedStringMapForMigratedLocks.put(new Long(1), "75");
 		toBePrependedStringMapForMigratedLocks.put(new Long(2), "80");
 		toBePrependedStringMapForMigratedLocks.put(new Long(3), "85");
 		toBePrependedStringMapForMigratedLocks.put(new Long(4), "90");
 		toBePrependedStringMapForMigratedLocks.put(new Long(5), "95");
 	}
-	
+
 	public TPCCTablePropertiesClusteredPartitioning(Configuration conf,
 			HBaseAdmin admin) {
 		super(conf, admin);
@@ -196,18 +198,30 @@ public class TPCCTablePropertiesClusteredPartitioning extends
 				+ nextOrderId + ":" + "order";
 	}
 
+	public String createOrderLineTableKey(long warehouseId, long districtId,
+			long districtNextOrderId, long itemId) {
+		return warehouseKeyMap.get(warehouseId) + ":" + districtId + ":"
+				+ Long.toString(districtNextOrderId) + ":" + "order"
+				+ WALTableProperties.logAndKeySeparator
+				+ warehouseKeyMap.get(warehouseId) + ":" + districtId + ":"
+				+ Long.toString(districtNextOrderId) + ":" + itemId + ":" + "orderLine";
+	}
+
 	public String createToBeMigratedNodeHint(long homeWarehouseId) {
-		// Assumption: There are 15 warehouses sitting on 15 different nodes. 5 nodes will host the
-		// migrated locks. TtoBePrependedStringForMigratedLocks map holds the String to be prepended 
+		// Assumption: There are 15 warehouses sitting on 15 different nodes. 5
+		// nodes will host the
+		// migrated locks. TtoBePrependedStringForMigratedLocks map holds the String
+		// to be prepended
 		// for the 5 different lock-servers.
 		long numLockServers = 5;
 		long hashedHomeWarehouse = (homeWarehouseId % numLockServers) + 1;
-		String toBePrependedString = toBePrependedStringMapForMigratedLocks.get(hashedHomeWarehouse);
+		String toBePrependedString = toBePrependedStringMapForMigratedLocks
+				.get(hashedHomeWarehouse);
 		// Note that we aren't using any separator.
 		String finalMigratedNodeHint = toBePrependedString + homeWarehouseId;
 		return finalMigratedNodeHint;
 	}
-	
+
 	// This makes the data table already present and load balanced in the cluster.
 	// The execution of transactions would only lead to overwriting of values.
 	public void populateDataTableEntries(long numWarehouses, boolean writeBlob)

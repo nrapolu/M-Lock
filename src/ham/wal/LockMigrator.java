@@ -203,11 +203,19 @@ public class LockMigrator extends HasThread implements Runnable {
 		}
 
 		LogId firstLogId = logIdToKeyMap.firstKey();
-		//System.out.println("First logId: " + firstLogId.toString());
 		LogId lastLogId = logIdToKeyMap.lastKey();
-		//System.out.println("Last logId: " + lastLogId.toString());
+
+		// Swap first and lastLogId if the later is less than the former. This can happen when the 
+		// contentionOrder is changed by the user. Our use of the first and last is to have bounds
+		// on the regions, nothing more.
+		if (LogId.compareOnlyKey(firstLogId, lastLogId) > 0) {
+			LogId tmp = firstLogId;
+			firstLogId = lastLogId;
+			lastLogId = tmp;
+		}
+		
 		MigrateLocksCallBack migrateLocksCallBack = new MigrateLocksCallBack();
-		logTable.coprocessorExec(WALManagerDistTxnProtocol.class, null, null,
+		logTable.coprocessorExec(WALManagerDistTxnProtocol.class, firstLogId.getKey(), lastLogId.getKey(),
 				new Batch.Call<WALManagerDistTxnProtocol, List<List<ImmutableBytesWritable>>>() {
 					@Override
 					public List<List<ImmutableBytesWritable>> call(WALManagerDistTxnProtocol instance)

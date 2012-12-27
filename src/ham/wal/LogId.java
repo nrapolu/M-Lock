@@ -117,4 +117,9 @@ public class LogId implements Writable {
 			return false;
 		return true;
 	}
+	
+	public static int compareOnlyKey(LogId o1, LogId o2) {
+		int result = Bytes.compareTo(o1.getKey(), o2.getKey());
+		return result;
+	}
 }

@@ -34,6 +34,7 @@ import org.apache.hadoop.hbase.client.HTableInterface;
 import org.apache.hadoop.hbase.client.HTablePool;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
+import org.apache.hadoop.hbase.client.Row;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
 import org.apache.hadoop.hbase.filter.BinaryComparator;
 import org.apache.hadoop.hbase.filter.CompareFilter;
@@ -69,7 +70,7 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 	// new DaemonThreadFactory());
 
 	public static void sysout(String otp) {
-		 //System.out.println(otp);
+		// System.out.println(otp);
 	}
 
 	@Override
@@ -980,13 +981,10 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 		// Get the coprocessor environment
 		RegionCoprocessorEnvironment env = (RegionCoprocessorEnvironment) getEnvironment();
 		HRegion region = env.getRegion();
-		// Among the logIds sent to us, not all them will be processed by us. This
-		// list
-		// will contain those logs which we will process, and the map will contain
+		// Among the logIds sent to us, not all them will be processed by us. The
+		// map will contain
 		// the indirection
 		// from "our id" to the id present in the sent list.
-		List<LogId> ourLogs = new LinkedList<LogId>();
-		List<List<ImmutableBytesWritable>> ourKeys = new LinkedList<List<ImmutableBytesWritable>>();
 		int ourKeyId = 0;
 		Map<Integer, String> localKeyIdToGlobalKeyIdMap = new HashMap<Integer, String>();
 
@@ -1003,7 +1001,6 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 				continue;
 			}
 
-			ourLogs.add(logId);
 			List<ImmutableBytesWritable> correspKeys = keys.get(logIndex);
 			for (int keyIndex = 0; keyIndex < correspKeys.size(); keyIndex++) {
 				localKeyIdToGlobalKeyIdMap.put(ourKeyId, Integer.toString(logIndex)
@@ -1055,12 +1052,6 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 			}
 		}
 
-		for (int k = 0; k < logs.size(); k++) {
-			LogId log = logs.get(k);
-			List<ImmutableBytesWritable> boolList = returnValList.get(k);
-			sysout("Verification: for log: " + log.toString() + ", boolList size: "
-					+ boolList.size());
-		}
 		return returnValList;
 	}
 
@@ -1234,6 +1225,227 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 	@Override
 	public Boolean commitWritesPerEntityGroupWithShadows(Long transactionId,
 			List<LogId> logIdList, List<List<Put>> allUpdates,
+			List<List<LogId>> toBeUnlockedDestLogIds) throws IOException {
+		return commitWritesPerEntityGroupWithShadowsSingleThreaded(transactionId,
+				logIdList, allUpdates, toBeUnlockedDestLogIds);
+	}
+
+	//TODO: This function implementation is very crude. Lots of refactoring needed. Reasons are: 
+	// 1. In memory processing happens before walEdits -- not safe.
+	// 2. Locks in EndpointForKVSpace commit function are given up before the WALEdits -- not safe.
+	// 3. After some micro-instrumentation, the inMemOps time is around 4 ms and the flushtime
+	// 		is also around 4ms. Total avg commit stage time is 14ms. Around 6ms are being taken
+	// 		for EndPoint invocation. This is probably the reason, HBase folks moved from EndPoint
+	//		to some CoprocessorService!
+	public Boolean commitWritesPerEntityGroupWithShadowsSingleThreaded(
+			Long transactionId, List<LogId> logIdList, List<List<Put>> allUpdates,
+			List<List<LogId>> toBeUnlockedDestLogIds) throws IOException {
+		// Get the coprocessor environment
+		RegionCoprocessorEnvironment env = (RegionCoprocessorEnvironment) getEnvironment();
+		HRegion region = env.getRegion();
+		// Among the logIds sent to us, not all them will be processed by us. This
+		// list
+		// will contain those logs which we will process, and the map will contain
+		// the indirection
+		// from "our id" to the id present in the sent list.
+		List<LogId> ourLogIds = new LinkedList<LogId>();
+		int ourIdCount = 0;
+		Map<Integer, Integer> localIdToGlobalIdMap = new HashMap<Integer, Integer>();
+
+		for (int logIndex = 0; logIndex < logIdList.size(); logIndex++) {
+			LogId logId = logIdList.get(logIndex);
+			// If the logId does not belong to this region, we just skip.
+			if (!HRegion.rowIsInRange(region.getRegionInfo(), logId.getKey()))
+				continue;
+
+			ourLogIds.add(logId);
+			localIdToGlobalIdMap.put(ourIdCount, logIndex);
+			ourIdCount++;
+		}
+		HTable dataTable = new HTable(super.conf, WALTableProperties.dataTableName);
+		List<WALEdit> accumulatedWalEdits = new LinkedList<WALEdit>();
+		List<Row> firstSetOfCausalLockReleases = new LinkedList<Row>();
+		List<Row> secondSetOfCausalLockReleases = new LinkedList<Row>();
+		boolean overallCommitStatus = true;
+
+		//long startInMemOpsTime = System.currentTimeMillis();
+		// TODO: Ideally, the shadow objects need to be fetched from the store. For
+		// now, we don't really
+		// use this data as this function is taking in the actual updates (Puts).
+		// If another transaction is doing a roll-forward, we won't have those Puts.
+		for (int localId = 0; localId < ourLogIds.size(); localId++) {
+			// Execute the local transaction on the logId using the fetched snapshot.
+			int globalId = localIdToGlobalIdMap.get(localId);
+			final LogId logId = logIdList.get(globalId);
+			sysout("Inside Commit per entity group, processing logId: "
+					+ logId.toString());
+			// Final readSet to be "checked" and final writeSet to be committed.
+			Map<byte[], Set<ImmutableBytesWritable>> readSets = new TreeMap<byte[], Set<ImmutableBytesWritable>>(
+					Bytes.BYTES_COMPARATOR);
+			final List<Write> finalWrites = new LinkedList<Write>();
+
+			// In this function, since we do not use shadow objects, there will be not
+			// be any
+			// reads. All the given updates (Puts) are converted to writes and
+			// committed to the WAL.
+			List<Put> updates = allUpdates.get(globalId);
+			List<LogId> destLogIds = toBeUnlockedDestLogIds.get(globalId);
+			final List<ImmutableBytesWritable> toBeUnlockedKeys = new LinkedList<ImmutableBytesWritable>();
+			final List<Integer> commitTypeInfo = new LinkedList<Integer>();
+
+			byte[] versionColName = Bytes.toBytes(Bytes
+					.toString(WALTableProperties.dataTableName)
+					+ Write.nameDelimiter
+					+ Bytes.toString(WALTableProperties.dataFamily)
+					+ Write.nameDelimiter
+					+ Bytes.toString(WALTableProperties.versionColumn));
+
+			for (int updateIndex = 0; updateIndex < updates.size(); updateIndex++) {
+				Put put = updates.get(updateIndex);
+				// Form the key for this put's shadow. Read that from snapshot; if not
+				// available,
+				// read it from datastore.
+				// TODO: Ideally, the contents of the ShadowPut should be read and
+				// copied into the
+				// original Put object. However, since this function takes in the update
+				// list as
+				// entire Put object, we just serialize the sent Put object and store it
+				// in WAL.
+				// When we remove the sending of Put objects in this function
+				// (decreasing serialization
+				// overhead), then we'll have to resort to this copying. For now, we
+				// escape that.
+				// Also, the check object sent to the commit function will not have any
+				// readSets in it,
+				// as we know that there won't be any concurrent transaction writing to
+				// the same shadow
+				// key -- they have transactionId appended to them.
+
+				// TODO: Look at the TODO above this loop.
+				// valueWriteToOrigKey.setValue(r.getValue(WALTableProperties.dataFamily,
+				// WALTableProperties.dataColumn));
+				// finalWrites.add(valueWriteToOrigKey);
+
+				// Add locks to be released first at destination. The destination could
+				// be our-migrated-position, someone-else's-migrated-position or the
+				// base
+				// position. Only in the first case, since we migrated, we will also
+				// unlock the source and reset
+				// the migration information.
+				LogId destLogId = destLogIds.get(updateIndex);
+				byte[] toBeUnlockedKeyAtDest = Bytes.toBytes(Bytes.toString(destLogIds
+						.get(updateIndex).getKey())
+						+ WALTableProperties.logAndKeySeparator
+						+ Bytes.toString(put.getRow()));
+				toBeUnlockedKeys.add(new ImmutableBytesWritable(toBeUnlockedKeyAtDest));
+				commitTypeInfo.add(destLogId.getCommitType());
+
+				// Add the base logId to be unlocked and reset if we migrated this lock.
+				if (destLogId.getCommitType() == LogId.ONLY_DELETE) {
+					byte[] toBeUnlockedKeyAtSource = Bytes.toBytes(Bytes.toString(logId
+							.getKey())
+							+ WALTableProperties.logAndKeySeparator
+							+ Bytes.toString(put.getRow()));
+
+					toBeUnlockedKeys.add(new ImmutableBytesWritable(
+							toBeUnlockedKeyAtSource));
+					commitTypeInfo.add(LogId.UNLOCK_AND_RESET_MIGRATION);
+				}
+
+				// For every KeyValue, we create a write and add it to finalWrites.
+				// Typically, we expect only one KeyValue with the value information.
+				// TODO: This can be used to have writes to multiple columns; in which
+				// case,
+				// put.getFamilyMap() would be the starting point for iteration.
+				if (!put.isEmpty()) {
+					for (Map.Entry<byte[], List<KeyValue>> familyMap : put.getFamilyMap()
+							.entrySet()) {
+						byte[] family = familyMap.getKey();
+						List<KeyValue> kvs = familyMap.getValue();
+						for (KeyValue kv : kvs) {
+							byte[] itemName = Bytes.toBytes(Bytes
+									.toString(WALTableProperties.dataTableName)
+									+ Write.nameDelimiter
+									+ Bytes.toString(family)
+									+ Write.nameDelimiter + Bytes.toString(kv.getQualifier()));
+
+							Write valueWriteToOrigKey = new Write();
+							valueWriteToOrigKey.setName(itemName);
+							valueWriteToOrigKey.setKey(put.getRow());
+							valueWriteToOrigKey.setValue(kv.getValue());
+							finalWrites.add(valueWriteToOrigKey);
+							sysout("Final to-be-committed Write using data from " + "store: "
+									+ valueWriteToOrigKey.toString());
+						}
+					}
+				}
+			}
+
+			// Prepare a check object and commit the write-set with optimistic
+			// checks. In this case, we didn't have any reads, so the check object
+			// will be empty. However, the Check needs to have a timestamp even if
+			// there aren't any
+			// readSets in it -- this is a crap we have to deal with in-order to avoid
+			// heavy refactoring
+			// of the code in EndpointForMyKVSpace.
+			Snapshot snapshot = this.start(logId);
+			final Check check = new Check();
+			check.setTimestamp(snapshot.getTimestamp());
+
+			// Commit the check object and the write-sets.
+			// boolean commitResponse = super.commit(logId, check, finalWrites, null);
+			boolean commitStatus = this.commitToMemory(logId, check, finalWrites,
+					toBeUnlockedKeys, commitTypeInfo, firstSetOfCausalLockReleases,
+					secondSetOfCausalLockReleases, accumulatedWalEdits);
+			overallCommitStatus = overallCommitStatus && commitStatus;
+		}
+		//long stopInMemOpsTime = System.currentTimeMillis();
+		//System.out.println("InMemOpsTime: " + (stopInMemOpsTime - startInMemOpsTime));
+		
+		//long startFlushingTime = System.currentTimeMillis();
+		// Group the accumulatedWalEdits into one and append them to log.
+		WALEdit finalWalEdit = new WALEdit();
+		for (WALEdit walEdit : accumulatedWalEdits) {
+			for (KeyValue kv : walEdit.getKeyValues()) {
+				finalWalEdit.add(kv);
+			}
+		}
+
+		long now = EnvironmentEdgeManager.currentTimeMillis();
+		HLog log = region.getLog();
+		HTableDescriptor htd = new HTableDescriptor(
+				WALTableProperties.dataTableName);
+		log.append(region.getRegionInfo(), WALTableProperties.dataTableName,
+				finalWalEdit, now, htd);
+		try {
+			// Flush the firstSetOfCausalLockReleases. In our setting, the data object and the lock object
+			// reside on the same region. Thus, we can directly use HRegion function calls instead of going
+			// through dataTable. Also we are assuming that all Lock Releases on H-WAL objects are being
+			// done through Put operations.
+			if (!firstSetOfCausalLockReleases.isEmpty()) {
+				Put[] localRegionPuts = new Put[firstSetOfCausalLockReleases.size()];
+				for (int i = 0; i < firstSetOfCausalLockReleases.size(); i++) {
+					Row r = firstSetOfCausalLockReleases.get(i);
+					localRegionPuts[i] = (Put)r;
+				}
+				region.put(localRegionPuts);
+			}
+			// Flush the secondSetOfCausalLockReleases. They are lock releases on the
+			// M-WALs.
+			if (!secondSetOfCausalLockReleases.isEmpty()) 
+				dataTable.batch(secondSetOfCausalLockReleases);
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+		}
+
+		//long stopFlushingTime = System.currentTimeMillis();
+		//System.out.println("Flushing time: " + (stopFlushingTime - startFlushingTime));
+		
+		return overallCommitStatus;
+	}
+
+	public Boolean commitWritesPerEntityGroupWithShadowsMultiThreaded(
+			Long transactionId, List<LogId> logIdList, List<List<Put>> allUpdates,
 			List<List<LogId>> toBeUnlockedDestLogIds) throws IOException {
 		// Get the coprocessor environment
 		RegionCoprocessorEnvironment env = (RegionCoprocessorEnvironment) getEnvironment();
@@ -1661,17 +1873,19 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 	@Override
 	public List<List<Result>> getAfterServerSideMerge(List<LogId> logs,
 			List<List<Get>> gets) throws IOException {
-		if (logs.size() > 3) 
+		if (logs.size() > 3)
 			return parallelGetAfterServerSideMerge(logs, gets);
-		
+
 		return serialGetAfterServerSideMerge(logs, gets);
 	}
 
-	// BIG-TODO: We are skipping the "merge with snapshots" part. Because in our current
-	// implementation currentTs is always equal to syncTs and so the snapshot is always
+	// BIG-TODO: We are skipping the "merge with snapshots" part. Because in our
+	// current
+	// implementation currentTs is always equal to syncTs and so the snapshot is
+	// always
 	// empty.
-	public List<List<Result>> parallelGetAfterServerSideMerge(List<LogId> logs, List<List<Get>> gets)
-			throws IOException {
+	public List<List<Result>> parallelGetAfterServerSideMerge(List<LogId> logs,
+			List<List<Get>> gets) throws IOException {
 		// Get the coprocessor environment
 		RegionCoprocessorEnvironment env = (RegionCoprocessorEnvironment) getEnvironment();
 		final HRegion region = env.getRegion();
@@ -1681,8 +1895,9 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 		for (int j = 0; j < logs.size(); j++) {
 			results.add(j, null);
 		}
-		
-		List<Future<List<Result>>> futures = new ArrayList<Future<List<Result>>>(logs.size());
+
+		List<Future<List<Result>>> futures = new ArrayList<Future<List<Result>>>(
+				logs.size());
 		for (int i = 0; i < logs.size(); i++)
 			futures.add(i, null);
 		for (int logIdIndex = 0; logIdIndex < logs.size(); logIdIndex++) {
@@ -1694,17 +1909,18 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 				continue;
 			}
 			sysout("LogId in region: " + logId.toString());
-			
+
 			Future<List<Result>> future = pool.submit(new Callable<List<Result>>() {
-					public List<Result> call() throws Exception {
-						List<Result> resultsForLogId = new ArrayList<Result>(getsForLogId.size());
-						for (Get g: getsForLogId) {
-							resultsForLogId.add(region.get(g, null));
-						}
-						return resultsForLogId;
+				public List<Result> call() throws Exception {
+					List<Result> resultsForLogId = new ArrayList<Result>(getsForLogId
+							.size());
+					for (Get g : getsForLogId) {
+						resultsForLogId.add(region.get(g, null));
 					}
-				});
-				futures.set(logIdIndex, future);
+					return resultsForLogId;
+				}
+			});
+			futures.set(logIdIndex, future);
 		}
 
 		// Go through the futures and grab the snapshots.
@@ -1714,7 +1930,8 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 				continue;
 			try {
 				List<Result> resultsForLogId = future.get();
-				// size of futures is the same as size of logs, so we can use "i" as the result index.
+				// size of futures is the same as size of logs, so we can use "i" as the
+				// result index.
 				results.set(i, resultsForLogId);
 			} catch (InterruptedException e) {
 				// TODO Auto-generated catch block

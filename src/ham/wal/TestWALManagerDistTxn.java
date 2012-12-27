@@ -133,7 +133,9 @@ public class TestWALManagerDistTxn {
 		// threads.
 		HTablePool tablePool = new HTablePool(conf, 1);
 
-		WALManagerDistTxnClient walManagerDistTxnClient = new WALManagerDistTxnClient();
+		// Change this accordingly.
+		//WALManagerDistTxnClient walManagerDistTxnClient = new WALManagerDistTxnClient();
+		WALManagerDistTxnClient walManagerDistTxnClient = new WALManagerDistTxnClientRefactored();
 
 		while (true) {
 			int trxQueueSize = 500;

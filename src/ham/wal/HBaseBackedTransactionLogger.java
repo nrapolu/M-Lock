@@ -193,7 +193,7 @@ public class HBaseBackedTransactionLogger {
 		Put update = new Put(getRow(transactionId));
 		update.add(INFO_FAMILY, STATUS_QUALIFIER, HConstants.LATEST_TIMESTAMP,
 				Bytes.toBytes(status.name()));
-
+		update.setWriteToWAL(true);
 		HTableInterface table = getTable();
 		try {
 			table.put(update);

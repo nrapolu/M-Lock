@@ -187,6 +187,7 @@ public class DistTxnState {
 				//shadowPut.setFamilyMap(p.getFamilyMap());
 				shadowPut.add(WALTableProperties.dataFamily, WALTableProperties.dataColumn, 
 						WALTableProperties.appTimestamp, Bytes.toBytes("Dummy Shadow Value"));
+				shadowPut.setWriteToWAL(true);
 				shadowPuts.add(shadowPut);
 			}
 		}

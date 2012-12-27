@@ -16,7 +16,8 @@ import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.util.Bytes;
 
 public class TPCCNewOrderTrxExecutorClusteredPartitioning extends
-		TPCCTablePropertiesClusteredPartitioning implements Callable<DistTrxExecutorReturnVal> {
+		TPCCTablePropertiesClusteredPartitioning implements
+		Callable<DistTrxExecutorReturnVal> {
 	String[] tokens = null;
 	HTablePool tablePool = null;
 	HTable dataTable = null;
@@ -46,8 +47,8 @@ public class TPCCNewOrderTrxExecutorClusteredPartitioning extends
 		this.thinkingTime = thinkingTime;
 		this.lenOfTrx = lenOfTrx;
 		this.contentionOrder = contentionOrder;
-		this.walManagerDistTxnClient = walManagerDistTxnClient;
 		this.migrateLocks = migrateLocks;
+		this.walManagerDistTxnClient = walManagerDistTxnClient;
 	}
 
 	public static void sysout(long trxId, String otp) {
@@ -76,7 +77,7 @@ public class TPCCNewOrderTrxExecutorClusteredPartitioning extends
 		// 1st element in the tokens list will be "HomeWarehouse"
 		this.homeWarehouseId = Long.parseLong(tokens[0].split(":")[0]);
 		String homeWarehouseKey = createWarehouseTableKey(this.homeWarehouseId);
-		
+
 		Get g = new Get(Bytes.toBytes(homeWarehouseKey));
 		g.addColumn(dataFamily, warehouseTaxRateColumn);
 		g.addColumn(dataFamily, versionColumn);
@@ -86,7 +87,8 @@ public class TPCCNewOrderTrxExecutorClusteredPartitioning extends
 
 		// 2nd element in the tokens list will be "DistrictId"
 		this.districtId = Long.parseLong(tokens[1].split(":")[1]);
-		String districtKey = createDistrictTableKey(this.homeWarehouseId, this.districtId);
+		String districtKey = createDistrictTableKey(this.homeWarehouseId,
+				this.districtId);
 		g = new Get(Bytes.toBytes(districtKey));
 		g.addColumn(dataFamily, districtTaxRateColumn);
 		g.addColumn(dataFamily, districtNextOrderIdColumn);
@@ -167,8 +169,10 @@ public class TPCCNewOrderTrxExecutorClusteredPartitioning extends
 			// snapshot
 			// or through the data store.
 			long startReadTime = System.currentTimeMillis();
-			List<Result> results = walManagerDistTxnClient.getWithServerSideMerge(
-					logTable, dataTable, transactionState, gets);
+			// List<Result> results = walManagerDistTxnClient.getWithServerSideMerge(
+			// logTable, dataTable, transactionState, gets);
+			List<Result> results = walManagerDistTxnClient.get(logTable, dataTable,
+					transactionState, gets);
 			long endReadTime = System.currentTimeMillis();
 
 			// Grab the information we need from the results.
@@ -198,7 +202,8 @@ public class TPCCNewOrderTrxExecutorClusteredPartitioning extends
 			// dataFamily, customerDiscountColumn)));
 
 			// Create a Put to increase the districtNextOrder.
-			String districtKey = createDistrictTableKey(this.homeWarehouseId, this.districtId);
+			String districtKey = createDistrictTableKey(this.homeWarehouseId,
+					this.districtId);
 			Put updatedDistrictNextOrderId = new Put(Bytes.toBytes(districtKey));
 			updatedDistrictNextOrderId.add(dataFamily, districtNextOrderIdColumn,
 					appTimestamp, Bytes.toBytes(Long.toString(districtNextOrderId + 1)));
@@ -211,15 +216,18 @@ public class TPCCNewOrderTrxExecutorClusteredPartitioning extends
 					updatedDistrictNextOrderId);
 
 			// Create a Put to enter info into the Order table.
-			String orderKey = createOrderTableKey(homeWarehouseId, districtId, districtNextOrderId);
-			
+			String orderKey = createOrderTableKey(homeWarehouseId, districtId,
+					districtNextOrderId);
+
 			Put order = new Put(Bytes.toBytes(orderKey));
 			order.add(dataFamily, orderIdColumn, appTimestamp, Bytes.toBytes(Long
 					.toString(districtNextOrderId)));
-			order.add(dataFamily, orderDistrictIdColumn, appTimestamp, Bytes.toBytes(this.districtId));
-			order.add(dataFamily, orderWarehouseIdColumn, appTimestamp,
-					Bytes.toBytes(this.homeWarehouseId));
-			order.add(dataFamily, orderCustomerIdColumn, appTimestamp, Bytes.toBytes(this.customerId));
+			order.add(dataFamily, orderDistrictIdColumn, appTimestamp, Bytes
+					.toBytes(this.districtId));
+			order.add(dataFamily, orderWarehouseIdColumn, appTimestamp, Bytes
+					.toBytes(this.homeWarehouseId));
+			order.add(dataFamily, orderCustomerIdColumn, appTimestamp, Bytes
+					.toBytes(this.customerId));
 			order.add(dataFamily, orderOrderLineCountColumn, appTimestamp, Bytes
 					.toBytes("" + 10));
 			order.add(dataFamily, orderAllLocalColumn, appTimestamp, Bytes
@@ -289,37 +297,37 @@ public class TPCCNewOrderTrxExecutorClusteredPartitioning extends
 				// lock migration. Infact, one single lock for the order microshard is
 				// enough
 				// to provide isolation for all of the order line entries.
-				// Create a Put to update the orderline entry for this item.
-				/*
-				 * String newOrderLineKey = orderWALPrefix +
-				 * Bytes.toString(homeWarehouseId) + ":" + Bytes.toString(districtId) +
-				 * ":" + Long.toString(districtNextOrderId) + ":" + "order" +
-				 * WALTableProperties.logAndKeySeparator +
-				 * Bytes.toString(homeWarehouseId) + ":" + Bytes.toString(districtId) +
-				 * ":" + Long.toString(districtNextOrderId) + ":" + itemKey + ":" +
-				 * "orderLine"; Put orderLineEntry = new
-				 * Put(Bytes.toBytes(newOrderLineKey)); orderLineEntry.add(dataFamily,
-				 * orderLineOrderIdColumn, appTimestamp,
-				 * Bytes.toBytes(Long.toString(districtNextOrderId)));
-				 * orderLineEntry.add(dataFamily, orderLineDistrictIdColumn,
-				 * appTimestamp, districtId); orderLineEntry.add(dataFamily,
-				 * orderLineWarehouseIdColumn, appTimestamp, homeWarehouseId);
-				 * orderLineEntry.add(dataFamily, orderLineNumberColumn, appTimestamp,
-				 * Bytes.toBytes(itemKey)); orderLineEntry.add(dataFamily,
-				 * orderLineItemIdColumn, appTimestamp, Bytes.toBytes(itemKey)); //
-				 * TODO: writing homeWarehouse as the supplying warehouse is an //
-				 * approximation. orderLineEntry.add(dataFamily,
-				 * orderLineSupplyWarehouseIdColumn, appTimestamp, homeWarehouseId);
-				 * orderLineEntry.add(dataFamily, orderLineQuantityColumn, appTimestamp,
-				 * Bytes.toBytes("" + 1)); orderLineEntry.add(dataFamily,
-				 * orderLineAmountColumn, appTimestamp, Bytes.toBytes("" + itemPrice));
-				 * orderLineEntry.add(dataFamily, versionColumn, appTimestamp, Bytes
-				 * .toBytes(Long.toString(trxId)));
-				 * orderLineEntry.add(WALTableProperties.WAL_FAMILY,
-				 * WALTableProperties.regionObserverMarkerColumn, appTimestamp,
-				 * WALTableProperties.randomValue); walManagerDistTxnClient
-				 * .put(dataTable, transactionState, orderLineEntry);
-				 */
+				// // Create a Put to update the orderline entry for this item.
+				// String newOrderLineKey = createOrderLineTableKey(homeWarehouseId,
+				// districtId,
+				// districtNextOrderId, Long.parseLong(itemKey.split(":")[0]));
+				// Put orderLineEntry = new Put(Bytes.toBytes(newOrderLineKey));
+				// orderLineEntry.add(dataFamily, orderLineOrderIdColumn, appTimestamp,
+				// Bytes.toBytes(Long.toString(districtNextOrderId)));
+				// orderLineEntry.add(dataFamily, orderLineDistrictIdColumn,
+				// appTimestamp,
+				// Bytes.toBytes(this.districtId));
+				// orderLineEntry.add(dataFamily, orderLineWarehouseIdColumn,
+				// appTimestamp, Bytes.toBytes(homeWarehouseId));
+				// orderLineEntry.add(dataFamily, orderLineNumberColumn, appTimestamp,
+				// Bytes.toBytes(itemKey));
+				// orderLineEntry.add(dataFamily, orderLineItemIdColumn, appTimestamp,
+				// Bytes.toBytes(itemKey));
+				// // TODO: writing homeWarehouse as the supplying warehouse is an //
+				// // approximation.
+				// orderLineEntry.add(dataFamily, orderLineSupplyWarehouseIdColumn,
+				// appTimestamp, Bytes.toBytes(homeWarehouseId));
+				// orderLineEntry.add(dataFamily, orderLineQuantityColumn, appTimestamp,
+				// Bytes.toBytes("" + 1));
+				// orderLineEntry.add(dataFamily, orderLineAmountColumn, appTimestamp,
+				// Bytes.toBytes("" + itemPrice));
+				// orderLineEntry.add(dataFamily, versionColumn, appTimestamp, Bytes
+				// .toBytes(Long.toString(trxId)));
+				// orderLineEntry.add(WALTableProperties.WAL_FAMILY,
+				// WALTableProperties.regionObserverMarkerColumn, appTimestamp,
+				// WALTableProperties.randomValue);
+				// walManagerDistTxnClient
+				// .put(dataTable, transactionState, orderLineEntry);
 			}
 			// Transaction commits happens in 3 phases:
 			// 1. Place shadow puts in the store (remember to have different
@@ -365,7 +373,7 @@ public class TPCCNewOrderTrxExecutorClusteredPartitioning extends
 
 			long startVersionCheckTime = System.currentTimeMillis();
 			commitResponse = commitResponse
-					&& walManagerDistTxnClient.commitRequestCheckVersionsFromWAL(
+					&& walManagerDistTxnClient.commitRequestCheckVersions(
 							logTable, dataTable, transactionState);
 			long endVersionCheckTime = System.currentTimeMillis();
 
