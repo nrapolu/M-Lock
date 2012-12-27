@@ -1070,7 +1070,11 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 					p.add(WALTableProperties.WAL_FAMILY,
 							WALTableProperties.regionObserverMarkerColumn,
 							WALTableProperties.appTimestamp, WALTableProperties.randomValue);
-					firstSetOfCausalLockReleases.add(p);
+					//TODO: The choice of putting this operation in first or second causal lock releases
+					//depends on whether unlocking is happening at H-WAL or M-WAL -- first set if H-WAL, second-set
+					//if M-WAL. For now, we are just plainly putting this in secondSet, because firstSet prematurely
+					// assumes that all keys in that set are in the present (same) region.
+					secondSetOfCausalLockReleases.add(p);
 				} else if (commitTypeInfo.get(index) == LogId.UNLOCK_AND_RESET_MIGRATION) {
 					sysout("UNLOCKING AND RESETING KEY: "
 							+ Bytes.toString(toBeUnlockedDestKey.get()));

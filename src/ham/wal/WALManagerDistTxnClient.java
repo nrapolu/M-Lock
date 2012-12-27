@@ -55,7 +55,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 	}
 
 	public static void sysout(long trxId, String otp) {
-		// System.out.println(trxId + " : " + otp);
+		//System.out.println(trxId + " : " + otp);
 	}
 
 	public DistTxnState beginTransaction() throws IOException {
