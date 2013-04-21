@@ -1,5 +1,7 @@
 package ham.wal;
 
+import ham.wal.scheduler.RequestPriority;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -166,8 +168,8 @@ public class TPCCNewOrderTrxExecutor extends TPCCTableProperties implements
 			// snapshot
 			// or through the data store.
 			long startReadTime = System.currentTimeMillis();
-			List<Result> results = walManagerDistTxnClient.getWithServerSideMerge(
-					logTable, dataTable, transactionState, gets);
+			List<Result> results = walManagerDistTxnClient.get(
+					logTable, dataTable, transactionState, gets, RequestPriority.OCC_READ_PHASE);
 			long endReadTime = System.currentTimeMillis();
 
 			// Grab the information we need from the results.

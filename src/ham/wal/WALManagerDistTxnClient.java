@@ -1,5 +1,7 @@
 package ham.wal;
 
+import ham.wal.scheduler.RequestPriority;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -26,6 +28,7 @@ import org.apache.hadoop.hbase.client.Action;
 import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.client.HTable;
+import org.apache.hadoop.hbase.client.HTableInterface;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.coprocessor.Batch;
@@ -323,15 +326,16 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		return results;
 	}
 
-	public List<Result> get(final HTable logTable,
-			final HTable dataTable, final DistTxnState transactionState,
-			final List<Get> gets) throws Throwable {
-		return getWithServerSideMerge(logTable, dataTable, transactionState, gets);
+	public List<Result> get(final HTableInterface logTable,
+			final HTableInterface dataTable, final DistTxnState transactionState,
+			final List<Get> gets, int requestPriorityTag) throws Throwable {
+		return getWithServerSideMerge(logTable, dataTable, transactionState, gets,
+				requestPriorityTag);
 	}
 		
-	public List<Result> getWithServerSideMerge(final HTable logTable,
-			final HTable dataTable, final DistTxnState transactionState,
-			final List<Get> gets) throws Throwable {
+	public List<Result> getWithServerSideMerge(final HTableInterface logTable,
+			final HTableInterface dataTable, final DistTxnState transactionState,
+			final List<Get> gets, int requestPriorityTag) throws Throwable {
 		long trxId = transactionState.getTransactionId();
 		// First we check if the object to be read is already present in cache. If
 		// so, we
@@ -423,6 +427,10 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 			lastLogId = tmp;
 		}
 
+		RequestPriority requestPriority = new RequestPriority(
+				requestPriorityTag, trxId, 0);
+		requestPriority.setExecRequestPriorityTag();
+		
 		GetWithServerSideMergeCallBack aGetWithServerSideMergeCallBack = new GetWithServerSideMergeCallBack();
 		logTable.coprocessorExec(WALManagerDistTxnProtocol.class, firstLogId
 				.getKey(), lastLogId.getKey(),
@@ -496,11 +504,11 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		return totalTimeForMigration;
 	}
 
-	public void put(final HTable table, final DistTxnState transactionState,
+	public void put(final HTableInterface dataTable, final DistTxnState transactionState,
 			final Put put) throws IOException {
 		LogId logId = WALTableProperties.getLogIdForKey(put.getRow());
 		HRegionLocation regionLocation = WALTableProperties
-				.getRegionLocationForLogId(table, logId);
+				.getRegionLocationForLogId(dataTable, logId);
 		transactionState
 				.addToWriteBuffer(logId, regionLocation, new Action(put, 1));
 		transactionState.addWriteInfoToDistTxnMetadata(put);
@@ -515,7 +523,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		}
 	}
 
-	public void putShadowObjects(final HTable logTable, final HTable dataTable,
+	public void putShadowObjects(final HTableInterface logTable, final HTableInterface dataTable,
 			final DistTxnState transactionState, boolean shouldMigrateLocks,
 			String preferredSalt) throws InterruptedException, IOException {
 		long trxId = transactionState.getTransactionId();
@@ -556,7 +564,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 	// The table for this should be the Global Txn Table; this function
 	// delegates identification of the table and persisting, to
 	// HBaseBackedTxnLogger.
-	public void putDistTxnState(HTable logTable, final DistTxnState txnState,
+	public void putDistTxnState(HTableInterface logTable, final DistTxnState txnState,
 			boolean shouldMigrateLocks) throws IOException {
 		// The list to be sent to LockMigrator
 		List<byte[]> lockSet = txnState.getPessimisticLockList();
@@ -699,7 +707,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 				LogId correspLogId = LockMigrator.afterMigrationKeyMap.get(lock);
 				if (correspLogId != null) {
 					logs.add(correspLogId);
-					if (correspLogId.getCommitType() == LogId.ONLY_DELETE) {
+					if (!correspLogId.equals(logId)) {
 						isKeyMigrated.add(true);
 					} else {
 						isKeyMigrated.add(false);
@@ -789,14 +797,24 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		// a conflicting client. For now, we just observe and note migration only
 		// during locking.
 		Map<LogId, LogId> dynamicMigrationMap = new HashMap<LogId, LogId>();
-		long nbLocksAcquired = 0;
+    long totalNbLocksToBeAcquired = keys.size();
+    long nbLocksAcquiredInThisRound = 0;
+    long nbLocksAcquiredSoFar = 0;
 		long flag;
 		while (true) {
-			for (int i = 0; i < nbLocksAcquired; i++) {
+			for (int i = 0; i < nbLocksAcquiredInThisRound; i++) {
 				logs.remove(0);
 				keys.remove(0);
 				isKeyMigrated.remove(0);
 			}
+      // RequestPriority changes with the number of locks that were acquired so far.         
+      // As the trx reaches completion, its priority is increased so as to give it           
+      // exclusive priority to go through uninterrupted.                                     
+      RequestPriority requestPriority = new RequestPriority(
+                      RequestPriority.PCC_ACQUIRE_LOCKS, trxId,
+                      (nbLocksAcquiredSoFar / totalNbLocksToBeAcquired));
+      requestPriority.setExecRequestPriorityTag();
+			
 			AcquireLockCallBack aLockCallBack = new AcquireLockCallBack();
 			logTable
 					.coprocessorExec(
@@ -846,11 +864,12 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 			} else {
 				allLocked = false;
 				flag = aLockCallBack.getFlag();
-				nbLocksAcquired = aLockCallBack.getNbLocksAcquired();
+				nbLocksAcquiredInThisRound = aLockCallBack.getNbLocksAcquired();
+				nbLocksAcquiredSoFar += nbLocksAcquiredInThisRound;
 				sysout(trxId, "Could not acquire all locks! Flag is: " + flag
-						+ " , nbLocksAcquired: " + nbLocksAcquired + " , sent keys size: "
+						+ " , nbLocksAcquired: " + nbLocksAcquiredInThisRound + " , sent keys size: "
 						+ keys.size() + "; the next to be acquired: "
-						+ Bytes.toString(keys.get((int) nbLocksAcquired).get()));
+						+ Bytes.toString(keys.get((int) nbLocksAcquiredInThisRound).get()));
 
 				// TODO: Have the roll-forward logic here. Once the roll-forward is
 				// tried, we need to
@@ -864,7 +883,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 				// If flag is 3, then it means the detour was deleted, which means we
 				// have to
 				// go back.
-				int indexOfMigratedKey = (int) nbLocksAcquired;
+				int indexOfMigratedKey = (int) nbLocksAcquiredInThisRound;
 				if (flag == 3) {
 					// The detour is deleted, we lookup the detour we original took and
 					// noted.
@@ -872,6 +891,10 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 					LogId migratedToLogId = logs.get(indexOfMigratedKey);
 					LogId previousLogIdOfMigratedKey = dynamicMigrationMap
 							.get(migratedToLogId);
+					if (previousLogIdOfMigratedKey == null) {
+            previousLogIdOfMigratedKey = WALTableProperties
+                            .getLogIdFromMigratedKey(keys.get(indexOfMigratedKey).get());
+					}
 					logs.set(indexOfMigratedKey, previousLogIdOfMigratedKey);
 					// Make a note that migration is removed.
 					isKeyMigrated.set(indexOfMigratedKey, false);
@@ -906,7 +929,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		return true;
 	}
 
-	public boolean commitRequestAcquireLocksViaIndirection(final HTable logTable,
+	public boolean commitRequestAcquireLocksViaIndirection(final HTableInterface logTable,
 			final DistTxnState transactionState, boolean stopForLockMigration)
 			throws Throwable {
 		final long trxId = transactionState.getTransactionId();
@@ -1032,14 +1055,25 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		// a conflicting client. For now, we just observe and note migration only
 		// during locking.
 		Map<LogId, LogId> dynamicMigrationMap = new HashMap<LogId, LogId>();
-		long nbLocksAcquired = 0;
+		long totalNbLocksToBeAcquired = keys.size();
+		long nbLocksAcquiredInThisRound = 0;
+		long nbLocksAcquiredSoFar = 0;
 		long flag;
+		
 		while (true) {
-			for (int i = 0; i < nbLocksAcquired; i++) {
+			for (int i = 0; i < nbLocksAcquiredInThisRound; i++) {
 				logs.remove(0);
 				keys.remove(0);
 				isLockAtMigratedLocation.remove(0);
 			}
+			// RequestPriority changes with the number of locks that were acquired so far.
+			// As the trx reaches completion, its priority is increased so as to give it
+			// exclusive priority to go through uninterrupted.
+			RequestPriority requestPriority = new RequestPriority(
+					RequestPriority.OCC_ACQUIRE_LOCKS, trxId, 
+					(nbLocksAcquiredSoFar / totalNbLocksToBeAcquired));
+			requestPriority.setExecRequestPriorityTag();
+			
 			AcquireLockCallBack aLockCallBack = new AcquireLockCallBack();
 			logTable
 					.coprocessorExec(
@@ -1089,11 +1123,12 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 			} else {
 				allLocked = false;
 				flag = aLockCallBack.getFlag();
-				nbLocksAcquired = aLockCallBack.getNbLocksAcquired();
+				nbLocksAcquiredInThisRound = aLockCallBack.getNbLocksAcquired();
+				nbLocksAcquiredSoFar += nbLocksAcquiredInThisRound;
 				sysout(trxId, "Could not acquire all locks! Flag is: " + flag
-						+ " , nbLocksAcquired: " + nbLocksAcquired + " , sent keys size: "
+						+ " , nbLocksAcquired: " + nbLocksAcquiredInThisRound + " , sent keys size: "
 						+ keys.size() + "; the next to be acquired: "
-						+ Bytes.toString(keys.get((int) nbLocksAcquired).get()));
+						+ Bytes.toString(keys.get((int) nbLocksAcquiredInThisRound).get()));
 
 				// TODO: Have the roll-forward logic here. Once the roll-forward is
 				// tried, we need to
@@ -1118,7 +1153,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 				// If flag is 3, then it means the detour was deleted, which means we
 				// have to
 				// go back.
-				int indexOfMigratedKey = (int) nbLocksAcquired;
+				int indexOfMigratedKey = (int) nbLocksAcquiredInThisRound;
 				if (flag == 3) {
 					// The detour is deleted, we lookup the detour we original took and
 					// noted.
@@ -1262,14 +1297,14 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		return nbUnsuccessfulAttempts;
 	}
 
-	public boolean commitRequestCheckVersions(final HTable logTable,
-			final HTable dataTable, final DistTxnState transactionState)
+	public boolean commitRequestCheckVersions(final HTableInterface logTable,
+			final HTableInterface dataTable, final DistTxnState transactionState)
 			throws Throwable {
 		return commitRequestCheckVersionsFromWAL(logTable, dataTable, transactionState);
 	}
 
-	private boolean commitRequestCheckVersionsFromWAL(final HTable logTable,
-			final HTable dataTable, final DistTxnState transactionState)
+	boolean commitRequestCheckVersionsFromWAL(final HTableInterface logTable,
+			final HTableInterface dataTable, final DistTxnState transactionState)
 			throws Throwable {
 		final long trxId = transactionState.getTransactionId();
 		List<Pair<ImmutableBytesWritable, Long>> readVersionList = transactionState
@@ -1295,7 +1330,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		// snapshot
 		// and if doesn't find it, fetches it from the table.
 		List<Result> results = this.getWithServerSideMerge(logTable, dataTable,
-				transactionState, actions);
+				transactionState, actions, RequestPriority.OCC_CHECK_VERSIONS);
 		boolean isFresh = true;
 		for (int i = 0; i < results.size(); i++) {
 			Result r = results.get(i);
@@ -1534,6 +1569,29 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		final List<LogId> logIdList = new LinkedList<LogId>();
 		final List<List<Put>> allUpdates = new LinkedList<List<Put>>();
 		final List<List<LogId>> toBeUnlockedDestLogIds = new LinkedList<List<LogId>>();
+		
+    // Collect the first and last logIds from the writeBuffer. They are used to                    
+    // limit the number                                                                            
+    // of regions we send this request to.                                                         
+    LogId firstLogId = writeBuffer.firstKey();
+    LogId lastLogId = writeBuffer.lastKey();
+    // Swap first and lastLogId if the later is less than the former. This can                     
+    // happen when the                                                                             
+    // contentionOrder is changed by the user. Our use of the first and last is                    
+    // to have bounds                                                                              
+    // on the regions, nothing more. The ordered traveral which happens in the                     
+    // next loop takes                                                                             
+    // care of the contention order.                                                               
+    if (LogId.compareOnlyKey(firstLogId, lastLogId) > 0) {
+            LogId tmp = firstLogId;
+            firstLogId = lastLogId;
+            lastLogId = tmp;
+    }
+
+    sysout(trxId, "FIRST LOG ID: " + firstLogId.toString());
+    sysout(trxId, "LAST LOG ID: " + lastLogId.toString());
+
+		
 		Map<ImmutableBytesWritable, ImmutableBytesWritable> writeBufferKeys = new HashMap<ImmutableBytesWritable, ImmutableBytesWritable>();
 		Map<LogId, Integer> logIdToIndexInList = new HashMap<LogId, Integer>();
 		// Iterating in the order of LogIds so as to avoid deadlocks.
@@ -1612,9 +1670,13 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		// However, the present table.coprocessorExec API does not have a way to
 		// specify only
 		// particular regions to which the Exec should be sent to.
+    RequestPriority requestPriority = new RequestPriority(
+        RequestPriority.PCC_COMMIT, trxId, 0);
+    requestPriority.setExecRequestPriorityTag();
+		
 		EntityGroupCommitCallBack entityGroupCommitCallBack = new EntityGroupCommitCallBack();
 		table.coprocessorExec(WALManagerDistTxnProtocol.class,
-				HConstants.EMPTY_START_ROW, HConstants.EMPTY_END_ROW,
+				firstLogId.getKey(), lastLogId.getKey(),
 				new Batch.Call<WALManagerDistTxnProtocol, Boolean>() {
 					@Override
 					public Boolean call(WALManagerDistTxnProtocol instance)
@@ -1628,7 +1690,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		return allUpdated;
 	}
 
-	boolean commitWritesPerEntityGroupWithShadows(final HTable table,
+	boolean commitWritesPerEntityGroupWithShadows(final HTableInterface logTable,
 			final DistTxnState transactionState) throws Throwable {
 		final long trxId = transactionState.getTransactionId();
 		// Collect the writeBufferPerLogId and send it off to the server-side
@@ -1768,8 +1830,12 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		// However, the present table.coprocessorExec API does not have a way to
 		// specify only
 		// particular regions to which the Exec should be sent to.
+		RequestPriority requestPriority = new RequestPriority(
+				RequestPriority.OCC_COMMIT, trxId, 0);
+		requestPriority.setExecRequestPriorityTag();
+		
 		EntityGroupCommitCallBack entityGroupCommitCallBack = new EntityGroupCommitCallBack();
-		table.coprocessorExec(WALManagerDistTxnProtocol.class, firstLogId.getKey(),
+		logTable.coprocessorExec(WALManagerDistTxnProtocol.class, firstLogId.getKey(),
 				lastLogId.getKey(),
 				new Batch.Call<WALManagerDistTxnProtocol, Boolean>() {
 					@Override
@@ -1784,7 +1850,7 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		return allUpdated;
 	}
 
-	boolean abortWithoutShadows(final HTable logTable,
+	boolean abortWithoutShadows(final HTableInterface logTable,
 			final DistTxnState transactionState) throws Throwable {
 		final long trxId = transactionState.getTransactionId();
 		TreeMap<LogId, TreeSet<Action>> writeBuffer = transactionState
@@ -1889,6 +1955,10 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 		// However, the present table.coprocessorExec API does not have a way to
 		// specify only
 		// particular regions to which the Exec should be sent to.
+		RequestPriority requestPriority = new RequestPriority(
+				RequestPriority.OCC_ABORT, trxId, 0);
+		requestPriority.setExecRequestPriorityTag();
+		
 		AbortCallBack abortCallBack = new AbortCallBack();
 		logTable.coprocessorExec(WALManagerDistTxnProtocol.class,
 				HConstants.EMPTY_START_ROW, HConstants.EMPTY_END_ROW,

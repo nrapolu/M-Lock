@@ -110,7 +110,7 @@ public class DistTrxExecutor implements Callable<DistTrxExecutorReturnVal> {
 			// snapshot
 			// or through the data store.
 			long startReadTime = System.currentTimeMillis();
-			List<Result> results = walManagerDistTxnClient.get(logTable, dataTable,
+			List<Result> results = walManagerDistTxnClient.getWithClientSideMerge(logTable, dataTable,
 					transactionState, gets, migrateLocks);
 			long endReadTime = System.currentTimeMillis();
 

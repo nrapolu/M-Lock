@@ -300,7 +300,8 @@ public class EfficientKVSpaceRegionObserver extends BaseRegionObserver {
 		List<KeyValue> kvsFromInMemoryStore = inMemState
 				.getAllKVsForASingleGet(scan);
 		Result inMemResult = new Result(kvsFromInMemoryStore);
-		sysout("Inside preGet, InMemoryResult: " + inMemResult.toString());
+		sysout("Inside preGet, for scan: " + scan.toJSON() + 
+				", InMemoryResult: " + inMemResult.toString());
 
 		// Verify that inMemStore returned results for all columns needed by Get.
 		// If it didn't do that for any columns, create a new Get object for

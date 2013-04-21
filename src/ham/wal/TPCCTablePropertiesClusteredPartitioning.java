@@ -5,7 +5,9 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Hashtable;
 import java.util.List;
+import java.util.Random;
 
+import org.apache.commons.math3.distribution.ZipfDistribution;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HTableDescriptor;
@@ -62,6 +64,10 @@ public class TPCCTablePropertiesClusteredPartitioning extends
 		// TODO Auto-generated constructor stub
 	}
 
+	public void sysout(String strOut) {
+		System.out.println(strOut);
+	}
+	
 	public TPCCTablePropertiesClusteredPartitioning() {
 	}
 
@@ -82,12 +88,11 @@ public class TPCCTablePropertiesClusteredPartitioning extends
 		// prefix.
 		// The walTable may also be split using the warehouse-id
 		List<byte[]> splitKeys = new ArrayList<byte[]>();
-		if (numSplits <= 11 && numSplits > 1) {
-			for (int i = 1; i <= numSplits - 2; i++) {
-				splitKeys.add(Bytes.toBytes(new Integer(i).toString()));
-			}
-			// ASCII character just after 9 is ":".
-			splitKeys.add(Bytes.toBytes(":"));
+		if (numSplits == 5) {
+			splitKeys.add(Bytes.toBytes("00:"));
+			splitKeys.add(Bytes.toBytes("05:"));
+			splitKeys.add(Bytes.toBytes("10:"));
+			splitKeys.add(Bytes.toBytes("15:"));
 		} else if (numSplits == 15) {
 			for (int i = 1; i <= 7; i++) {
 				String baseStr = new Integer(i).toString();
@@ -272,7 +277,7 @@ public class TPCCTablePropertiesClusteredPartitioning extends
 
 		// Populate the District table. There would be 10 districts per warehouse.
 		for (long i = 1; i <= numWarehouses; i++) {
-			for (long j = 1; j <= 10; j++) {
+			for (long j = 1; j <= numDistrictsPerWarehouse; j++) {
 				String key = createDistrictTableKey(i, j);
 				Put p = new Put(Bytes.toBytes(key));
 				p.add(dataFamily, districtTaxRateColumn, appTimestamp, Bytes
@@ -295,7 +300,7 @@ public class TPCCTablePropertiesClusteredPartitioning extends
 
 		// Populate the Customer table. Each district has 3000 customers.
 		for (long i = 1; i <= numWarehouses; i++) {
-			for (long j = 1; j <= 10; j++) {
+			for (long j = 1; j <= numDistrictsPerWarehouse; j++) {
 				for (long k = 1; k <= numCustomersPerDistrict; k++) {
 					String key = createCustomerTableKey(i, j, k);
 					Put p = new Put(Bytes.toBytes(key));
@@ -410,7 +415,7 @@ public class TPCCTablePropertiesClusteredPartitioning extends
 
 		// Populate the District table. There would be 10 districts per warehouse.
 		for (long i = 1; i <= numWarehouses; i++) {
-			for (long j = 1; j <= 10; j++) {
+			for (long j = 1; j <= numDistrictsPerWarehouse; j++) {
 				String keyStr = createDistrictTableKey(i, j);
 				byte[] key = Bytes.toBytes(keyStr);
 				LogId logId = getLogIdForKey(key);
@@ -494,4 +499,77 @@ public class TPCCTablePropertiesClusteredPartitioning extends
 		System.out.println("Wrote default lock data!");
 	}
 
+	private int generateItemFromZipfian() {
+		if (this.zipfForItem == null)
+			this.zipfForItem = new ZipfDistribution(numItemsPerWarehouse, contentionParam);
+
+		return zipfForItem.sample();
+	}
+	
+	private int generateWarehouseFromZipfian() {
+		if (this.zipfForWarehouse == null)
+			this.zipfForWarehouse = new ZipfDistribution(warehousesCount, warehouseDistParam);
+
+		return zipfForWarehouse.sample();
+	}
+
+	private StringBuffer generateDistTxnClusteredPartitioning(
+			StringBuffer txnStrBuf) {
+		HashMap<Integer, Integer> generatedIds = new HashMap<Integer, Integer>();
+		for (int i = 0; i < trxLen; i++) {
+			int itemId = -1;
+			int warehouseId = homeWarehouseId;
+			do {
+				if (contentionParam > 0.1)
+					itemId = generateItemFromZipfian();
+				else
+					itemId = rand.nextInt(numItemsPerWarehouse) + 1;
+			} while (generatedIds.get(itemId) != null);
+			generatedIds.put(itemId, itemId);
+			
+			int remoteWarehouseProbInInt = (int) (remoteWarehouseProb * 100);
+			//sysout("RemoteWarehouseProbInInt: " + remoteWarehouseProbInInt);
+			int randId = rand.nextInt(100);
+			if (randId < remoteWarehouseProbInInt) {
+				do {
+					// The comparison with 0.2 is to eliminate float "equality" comparisons.
+					if (warehouseDistParam > 0.02) {
+						warehouseId = generateWarehouseFromZipfian();
+						// NOTE: If we decided to put zipfian across warehouses, then highest contented 
+						// warehouse should be chosen for fulfillment irrespective of whether it is the home
+						// warehouse. The ability to choose from this zipfian is forced by high value of
+						// remotewarehouse probability. Thus, even if we start same number of clients per
+						// warehouse, the high remoteWarehouseProb and zipfian across warehouses will lead
+						// to gradual contention across warehouses. The residual part of "remoteWarehouseProb" 
+						// (1 - remoteWarehouseProb) will lead to multi-hops. 
+						break;
+					}	else { 
+						warehouseId = rand.nextInt(warehousesCount) + 1;
+					}
+				} while (warehouseId == homeWarehouseId && warehousesCount > 1);
+			}
+
+			txnStrBuf.append(itemId + " " + warehouseId + " ");
+		}
+		return txnStrBuf;
+	}
+
+	@Override
+	public String generateNewDistTxn() {
+		StringBuffer txnStrBuf = new StringBuffer();
+		int districtId = rand.nextInt(numDistrictsPerWarehouse) + 1;
+		int randACustomer = rand.nextInt(A_Customer);
+		int randXYCustomer = rand.nextInt(numCustomersPerDistrict) + 1;
+		int customerId = ((randACustomer | randXYCustomer) + C)
+				% numCustomersPerDistrict + 1;
+
+		txnStrBuf.append(homeWarehouseId + ":warehouse ");
+		txnStrBuf.append(homeWarehouseId + ":" + districtId + ":district ");
+		txnStrBuf.append(homeWarehouseId + ":" + districtId + ":" + customerId
+				+ ":customer ");
+
+		txnStrBuf = generateDistTxnClusteredPartitioning(txnStrBuf);
+		//System.out.println("Generated txn: " + txnStrBuf);
+		return txnStrBuf.toString();
+	}
 }

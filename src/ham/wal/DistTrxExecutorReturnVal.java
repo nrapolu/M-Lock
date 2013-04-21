@@ -23,6 +23,44 @@ public class DistTrxExecutorReturnVal {
 	public long nbNetworkRoundTripsInTotalForLocking = 0;
 	public long lockMigrationTime = 0;
 	
+	public long totalCallDuration = 0;
+	public long minCallDuration = 0;
+	public long maxCallDuration = 0;
+	
+	public long totalTrxExecuted = 0;
+	
+	public long getTotalTrxExecuted() {
+		return totalTrxExecuted;
+	}
+
+	public void setTotalTrxExecuted(long totalTrxExecuted) {
+		this.totalTrxExecuted = totalTrxExecuted;
+	}
+
+	public long getTotalCallDuration() {
+		return totalCallDuration;
+	}
+
+	public void setTotalCallDuration(long totalCallDuration) {
+		this.totalCallDuration = totalCallDuration;
+	}
+
+	public long getMinCallDuration() {
+		return minCallDuration;
+	}
+
+	public void setMinCallDuration(long minCallDuration) {
+		this.minCallDuration = minCallDuration;
+	}
+
+	public long getMaxCallDuration() {
+		return maxCallDuration;
+	}
+
+	public void setMaxCallDuration(long maxCallDuration) {
+		this.maxCallDuration = maxCallDuration;
+	}
+
 	public long getFirstPutTxnStateTime() {
 		return firstPutTxnStateTime;
 	}

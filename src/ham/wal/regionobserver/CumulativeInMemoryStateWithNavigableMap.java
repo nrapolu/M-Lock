@@ -706,5 +706,18 @@ public class CumulativeInMemoryStateWithNavigableMap {
 		public boolean next(final List<KeyValue> results) throws IOException {
 			return next(results, -1);
 		}
+
+		@Override
+		public boolean next(List<KeyValue> arg0, String arg1) throws IOException {
+			// TODO Auto-generated method stub
+			return false;
+		}
+
+		@Override
+		public boolean next(List<KeyValue> arg0, int arg1, String arg2)
+				throws IOException {
+			// TODO Auto-generated method stub
+			return false;
+		}
 	}
 }

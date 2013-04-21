@@ -17,10 +17,10 @@ import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.util.Bytes;
 
-public class TestWALManagerDistTxn {
+public class TestWALManagerLocalTxn {
 	static Hashtable<String, String> logRoutingTable = new Hashtable<String, String>();
 
-	WALTableProperties walTableProps = null;
+	WALTableProperties tableProperties = null;
 	Configuration conf = null;
 	HBaseAdmin admin = null;
 	byte[] dataTableName = WALTableProperties.dataTableName;
@@ -28,21 +28,20 @@ public class TestWALManagerDistTxn {
 	byte[] dataFamily = WALTableProperties.dataFamily;
 	byte[] dataColumn = WALTableProperties.dataColumn;
 
-	int numWarehouses = 0;
+	long numWarehouses = 0;
 	int lenOfTrx = 0;
 	long countOfTrxToBeExecuted = Long.MAX_VALUE;
 	long totalTimeForExecution = Long.MAX_VALUE;
 	int numDataSplits = 1;
 	boolean doMigrateLocks = false;
 	int contentionOrder = 0;
-	int numItemsPerWarehouseTPCC = TPCCTableProperties.numItemsPerWarehouse;
-	int numDistrictsPerWarehouse = TPCCTableProperties.numDistrictsPerWarehouse;
+	int numItemsPerWarehouseTPCC = 100000;
 	int homeWarehouseId = 1;
 	boolean isClusteredPartitioning = false;
 
 	Random randGen = new Random();
 	
-	public TestWALManagerDistTxn() throws IOException {
+	public TestWALManagerLocalTxn() throws IOException {
 		this.conf = (Configuration) HBaseConfiguration.create();
 		this.admin = new HBaseAdmin(conf);
 	}
@@ -94,7 +93,9 @@ public class TestWALManagerDistTxn {
 		if (readFromFile)
 			return bin.readLine();
 		
-		return this.walTableProps.generateNewDistTxn();
+		// Random returns a number between 0 (inclusive) and its argument (exclusive).
+		int itemId = 1 + randGen.nextInt(this.numItemsPerWarehouseTPCC);
+		return itemId + " " + this.homeWarehouseId;
 	}
 
 	private DistTrxExecutorReturnVal executeDistTrxFromFileUsingSingleThread(
@@ -125,6 +126,7 @@ public class TestWALManagerDistTxn {
 		long nbDetoursEncountered = 0;
 		long nbNetworkRoundTripsInTotalForLocking = 0;
 		long lockMigrationTime = 0;
+		
 		long minCallDuration = Long.MAX_VALUE;
 		long maxCallDuration = Long.MIN_VALUE;
 		long totalCallDuration = 0;
@@ -162,7 +164,7 @@ public class TestWALManagerDistTxn {
 
 		long outerLoopStartTime = System.currentTimeMillis();
 		while (true) {
-			int trxQueueSize = 50;
+			int trxQueueSize = 500;
 			if (trxQueueSize + globalTrxCount > countOfTrxToBeExecuted)
 				trxQueueSize = (int) (countOfTrxToBeExecuted - globalTrxCount);
 
@@ -189,21 +191,14 @@ public class TestWALManagerDistTxn {
 					}
 				}
 
+				globalTrxCount++;
 				String[] tokens = waitingQueue.pollLast();
 				lenOfTrx = tokens.length;
 
-				/*
-				System.out.print("Trx tokens just before sending for execution: ");
-				for (String token: tokens) {
-					System.out.print(token + " ");
-				}
-				System.out.println("");
-				*/
-				
-				//TPCCPessimisticNewOrderTrxExecutor trxExecutor = new
-				//	TPCCPessimisticNewOrderTrxExecutor(
-				TPCCNewOrderTrxExecutorClusteredPartitioning trxExecutor = 
-					new TPCCNewOrderTrxExecutorClusteredPartitioning(
+				// TPCCPessimisticNewOrderTrxExecutor trxExecutor = new
+				// TPCCPessimisticNewOrderTrxExecutor(
+				// TPCCNewOrderTrxExecutor trxExecutor = new TPCCNewOrderTrxExecutor(
+				TPCCLocalTrxExecutorClusteredPartitioning trxExecutor = new TPCCLocalTrxExecutorClusteredPartitioning(
 						tokens, dataTable, walTable, walManagerDistTxnClient, thinkingTime,
 						lenOfTrx, contentionOrder, doMigrateLocks);
 				threadId++;
@@ -217,10 +212,8 @@ public class TestWALManagerDistTxn {
 					maxCallDuration = callDuration;
 				if (callDuration < minCallDuration)
 					minCallDuration = callDuration;
-				
+
 				if (trxExecReturnVal.tokens == null) {
-					// This implies a success. 
-					globalTrxCount++;
 					abortCount += trxExecReturnVal.abortCount;
 					numOfSuccessfulLocksAcquired += trxExecReturnVal.numOfLocksAcquired;
 					numOfUnsuccessfulAttempts += trxExecReturnVal.numOfUnsuccessfulAttempts;
@@ -376,9 +369,8 @@ public class TestWALManagerDistTxn {
 						+ "5 - Execute transactions from file. "
 						+ "6 - Execute transactions that are generated locally."
 						+ " <AvgLenOfTrx> <TrxFile> <CountOfTrxToBeExecuted:TotalTimeForExecution> [NumOfDataSplits] [DoMigrateLocks]"
-						+ " [ContentionOrder ':' ContentionParam] [NumItemsPerWarehouseTPCC ':' numDistrictsPerWarehouse] [IsClusteredPartitioning]"
-						+ " [HomeWarehouseId] [RemoteWarehouseProb] [WarehouseDistParam] [MaxHopsForATrx]");
-		
+						+ " [ContentionOrder] [NumItemsPerWarehouseTPCC] [IsClusteredPartitioning]"
+						+ " [HomeWarehouseId]");
 		System.exit(0);
 	}
 
@@ -391,14 +383,10 @@ public class TestWALManagerDistTxn {
 			printUsage();
 
 		try {
-			TestWALManagerDistTxn hbaseTrxCli = new TestWALManagerDistTxn();
-			hbaseTrxCli.numWarehouses = Integer.parseInt(args[0]);
-			TPCCTableProperties.warehousesCount = hbaseTrxCli.numWarehouses;
-			
+			TestWALManagerLocalTxn hbaseTrxCli = new TestWALManagerLocalTxn();
+			hbaseTrxCli.numWarehouses = Long.parseLong(args[0]);
 			hbaseTrxCli.lenOfTrx = Integer.parseInt(args[2]);
-			TPCCTableProperties.trxLen = hbaseTrxCli.lenOfTrx;
 			String optionStr = args[1];
-			
 			String[] countSplits = args[4].split(":");
 			long trxCount = Long.parseLong(countSplits[0]);
 			if (trxCount > 0) 
@@ -408,29 +396,17 @@ public class TestWALManagerDistTxn {
 				if (timeCount > 0)
 					hbaseTrxCli.totalTimeForExecution = timeCount;
 			}
-			
+
 			if (args.length >= 6)
 				hbaseTrxCli.numDataSplits = Integer.parseInt(args[5]);
 			if (args.length >= 7)
 				hbaseTrxCli.doMigrateLocks = (Integer.parseInt(args[6]) == 1) ? true
 						: false;
-			if (args.length >= 8) {
-				String[] splits = args[7].split(":");
-				hbaseTrxCli.contentionOrder = Integer.parseInt(splits[0]);
-				if (splits.length == 2)
-					TPCCTableProperties.contentionParam = Float.parseFloat(splits[1]);
-			}
+			if (args.length >= 8)
+				hbaseTrxCli.contentionOrder = Integer.parseInt(args[7]);
 			if (args.length >= 9) {
-				String[] splits = args[8].split(":");
-				// splits will be of length atleast 1.
-				hbaseTrxCli.numItemsPerWarehouseTPCC = Integer.parseInt(splits[0]);
+				hbaseTrxCli.numItemsPerWarehouseTPCC = Integer.parseInt(args[8]);
 				TPCCTableProperties.numItemsPerWarehouse = hbaseTrxCli.numItemsPerWarehouseTPCC;
-			
-				hbaseTrxCli.numDistrictsPerWarehouse = TPCCTableProperties.numDistrictsPerWarehouse;
-				if (splits.length == 2) {
-					hbaseTrxCli.numDistrictsPerWarehouse = Integer.parseInt(splits[1]);
-					TPCCTableProperties.numDistrictsPerWarehouse = hbaseTrxCli.numDistrictsPerWarehouse;
-				}			
 			}
 			if (args.length >= 10) {
 				hbaseTrxCli.isClusteredPartitioning = (Integer.parseInt(args[9]) == 1) ? true
@@ -438,13 +414,10 @@ public class TestWALManagerDistTxn {
 			}
 			if (args.length >= 11) {
 				hbaseTrxCli.homeWarehouseId = Integer.parseInt(args[10]);
-				TPCCTableProperties.homeWarehouseId = hbaseTrxCli.homeWarehouseId;
-				TPCCTableProperties.remoteWarehouseProb = Float.parseFloat(args[11]);
-				TPCCTableProperties.warehouseDistParam = Float.parseFloat(args[12]);
-				TPCCTableProperties.maxHops = Integer.parseInt(args[13]);
 			}
-			
+
 			WALTableProperties walTableProps = null;
+
 			if (hbaseTrxCli.isClusteredPartitioning)
 				walTableProps = new TPCCTablePropertiesClusteredPartitioning(
 						hbaseTrxCli.conf, hbaseTrxCli.admin);
@@ -452,8 +425,6 @@ public class TestWALManagerDistTxn {
 				walTableProps = new TPCCTableProperties(hbaseTrxCli.conf,
 						hbaseTrxCli.admin);
 
-			hbaseTrxCli.walTableProps = walTableProps;
-			
 			long startTime, endTime;
 			String trxFileName = null;
 			DistTrxExecutorReturnVal stats = null;
@@ -530,4 +501,3 @@ public class TestWALManagerDistTxn {
 		System.out.println(" Done! ");
 	}
 }
-

@@ -7,7 +7,6 @@ import java.util.Random;
 public class RandomIdGenerator {	
 	static void generateUniformRandIds(long startId, long endId, BufferedWriter bw)	throws IOException {
 		Random rand = new Random(0);
-		for ()
 	}
 	
 	static void printUsage() {
@@ -29,7 +28,5 @@ public class RandomIdGenerator {
 		long startId = Long.parseLong(args[1]);
 		long endId = Long.parseLong(args[2]);
 		String outputFile = args[0];
-		
-		if ()
 	}
 }

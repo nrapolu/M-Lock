@@ -15,6 +15,7 @@ import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.client.HBaseAdmin;
 import org.apache.hadoop.hbase.client.HTable;
+import org.apache.hadoop.hbase.client.HTableInterface;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -254,9 +255,9 @@ public class WALTableProperties {
 		return logId;
 	}
 
-	public static HRegionLocation getRegionLocationForLogId(HTable table,
+	public static HRegionLocation getRegionLocationForLogId(HTableInterface dataTable,
 			LogId logId) throws IOException {
-		return table.getRegionLocation(logId.getKey(), false);
+		return ((HTable) dataTable).getRegionLocation(logId.getKey(), false);
 	}
 
 	public void findCacheHits(String fileName, long nbTrxToExecute)
@@ -352,5 +353,9 @@ public class WALTableProperties {
 		logId.setKey(Bytes.toBytes(splits[0]));
 		logId.setName(walTableName);
 		return logId;
+	}
+	
+	public String generateNewDistTxn() {
+		return null;
 	}
 }

@@ -2,8 +2,11 @@ package ham.wal;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Random;
 
+import org.apache.commons.math3.distribution.ZipfDistribution;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HTableDescriptor;
@@ -52,7 +55,23 @@ public class TPCCTableProperties extends WALTableProperties {
 
 	static int numItemsPerWarehouse = 100000;
 	static int numCustomersPerDistrict = 3000;
+	static int numDistrictsPerWarehouse = 10;
 
+	Random rand = new Random();
+	ZipfDistribution zipfForItem = null;
+	ZipfDistribution zipfForWarehouse = null;
+	static final int A_Item = 8191;
+	static final int A_Customer = 1023;
+	static final int C = 1;
+
+	public static int warehousesCount = 15;
+	public static int homeWarehouseId = 1;
+	public static float contentionParam = 0;
+	public static float remoteWarehouseProb = (float) 0.1;
+	public static float warehouseDistParam = (float) 0;
+	public static int trxLen = 10;
+	public static int maxHops = 100;
+	
 	public TPCCTableProperties(Configuration conf, HBaseAdmin admin) {
 		super(conf, admin);
 		// TODO Auto-generated constructor stub
@@ -201,7 +220,7 @@ public class TPCCTableProperties extends WALTableProperties {
 
 		// Populate the District table. There would be 10 districts per warehouse.
 		for (long i = 1; i <= numWarehouses; i++) {
-			for (long j = 1; j <= 10; j++) {
+			for (long j = 1; j <= numDistrictsPerWarehouse; j++) {
 				String key = districtWALPrefix + Long.toString(i) + ":"
 						+ Long.toString(j) + ":" + "district";
 				Put p = new Put(Bytes.toBytes(key));
@@ -225,7 +244,7 @@ public class TPCCTableProperties extends WALTableProperties {
 
 		// Populate the Customer table. Each district has 3000 customers.
 		for (long i = 1; i <= numWarehouses; i++) {
-			for (long j = 1; j <= 10; j++) {
+			for (long j = 1; j <= numDistrictsPerWarehouse; j++) {
 				for (long k = 1; k <= numCustomersPerDistrict; k++) {
 					String key = Long.toString(j) + ":" + Long.toString(i) + ":"
 							+ Long.toString(k) + ":" + "customer";
@@ -341,7 +360,7 @@ public class TPCCTableProperties extends WALTableProperties {
 
 		// Populate the District table. There would be 10 districts per warehouse.
 		for (long i = 1; i <= numWarehouses; i++) {
-			for (long j = 1; j <= 10; j++) {
+			for (long j = 1; j <= numDistrictsPerWarehouse; j++) {
 				String keyStr = districtWALPrefix + Long.toString(i) + ":"
 						+ Long.toString(j) + ":" + "district";
 				byte[] key = Bytes.toBytes(keyStr);
@@ -425,5 +444,103 @@ public class TPCCTableProperties extends WALTableProperties {
 		admin.balanceSwitch(false);
 
 		System.out.println("Wrote default lock data!");
+	}
+	
+	private int generateItemFromZipfian() {
+		if (this.zipfForItem == null)
+			this.zipfForItem = new ZipfDistribution(numItemsPerWarehouse, contentionParam);
+
+		return zipfForItem.sample();
+	}
+	
+	class GenerateSpecificMultiHopUniform {
+		int prevId = 10;
+		HashMap<Integer, Integer> generatedIds = new HashMap<Integer, Integer>();
+		
+		public GenerateSpecificMultiHopUniform() {
+			this.prevId = 10;
+		}
+		
+		public void reset() {
+			this.prevId = 10;
+		}
+		
+		public int sample() {
+			int nextId = prevId + 5;
+			if (nextId == 100)
+				nextId = 10;
+			
+			prevId = nextId;
+			
+			int baseSaltId = 100;
+			int saltedId = -1;
+			
+			do {
+				generatedIds.put(saltedId, saltedId);
+				int salt = rand.nextInt(899) + baseSaltId;
+				String saltedIdStr = Integer.toString(nextId) + Integer.toString(salt);
+				int numItemsPerWarehouseStrLen = Integer.toString(numItemsPerWarehouse).length();
+				saltedIdStr = saltedIdStr.substring(0, numItemsPerWarehouseStrLen - 1);
+				saltedId = Integer.parseInt(saltedIdStr);
+			} while (generatedIds.get(saltedId) != null);
+			
+			return saltedId;
+		}
+	}
+
+	private StringBuffer generateDistTxn(
+			StringBuffer txnStrBuf) {
+		HashMap<Integer, Integer> generatedIds = new HashMap<Integer, Integer>();
+		GenerateSpecificMultiHopUniform generateSpecificMultiHop = null;
+		for (int i = 0; i < trxLen; i++) {
+			int itemId = -1;
+			int warehouseId = homeWarehouseId;
+			do {
+				generatedIds.put(itemId, itemId);
+				if (contentionParam < 0.1) {
+					itemId = rand.nextInt(numItemsPerWarehouse) + 1;
+				} else if (contentionParam > 2) {
+					if (generateSpecificMultiHop == null)
+						generateSpecificMultiHop = new GenerateSpecificMultiHopUniform();
+					
+					itemId = generateSpecificMultiHop.sample();
+					if (trxLen % maxHops == 0)
+						generateSpecificMultiHop.reset();
+					
+				} else {
+					itemId = generateItemFromZipfian();
+				}
+			} while (generatedIds.get(itemId) != null);
+
+			int remoteWarehouseProbInInt = (int) remoteWarehouseProb * 100;
+			int randId = rand.nextInt(100);
+			if (randId < remoteWarehouseProbInInt) {
+				do {
+					warehouseId = rand.nextInt(warehousesCount) + 1;
+				} while (warehouseId == homeWarehouseId);
+			}
+
+			txnStrBuf.append(itemId + " " + warehouseId + " ");
+		}
+		return txnStrBuf;
+	}
+
+	@Override
+	public String generateNewDistTxn() {
+		StringBuffer txnStrBuf = new StringBuffer();
+		int districtId = rand.nextInt(TPCCTableProperties.numDistrictsPerWarehouse) + 1;
+		int randACustomer = rand.nextInt(A_Customer);
+		int randXYCustomer = rand.nextInt(TPCCTableProperties.numCustomersPerDistrict) + 1;
+		int customerId = ((randACustomer | randXYCustomer) + C)
+				% TPCCTableProperties.numCustomersPerDistrict + 1;
+
+		txnStrBuf.append(homeWarehouseId + ":warehouse ");
+		txnStrBuf.append(homeWarehouseId + ":" + districtId + ":district ");
+		txnStrBuf.append(homeWarehouseId + ":" + districtId + ":" + customerId
+				+ ":customer ");
+
+		txnStrBuf = generateDistTxn(txnStrBuf);
+		//System.out.println("Generated txn: " + txnStrBuf);
+		return txnStrBuf.toString();
 	}
 }

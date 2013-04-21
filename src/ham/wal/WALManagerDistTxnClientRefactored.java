@@ -7,6 +7,7 @@ import java.util.List;
 
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.client.HTable;
+import org.apache.hadoop.hbase.client.HTableInterface;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -19,14 +20,14 @@ public class WALManagerDistTxnClientRefactored extends WALManagerDistTxnClient {
 		// TODO Auto-generated constructor stub
 	}
 
-	public List<Result> get(final HTable logTable,
-			final HTable dataTable, final DistTxnState transactionState,
+	public List<Result> get(final HTableInterface logTable,
+			final HTableInterface dataTable, final DistTxnState transactionState,
 			final List<Get> gets) throws Throwable {
 		return getViaHTableBatchCall(logTable, dataTable, transactionState, gets);
 	}
 	
-	private List<Result> getViaHTableBatchCall(final HTable logTable,
-			final HTable dataTable, final DistTxnState transactionState,
+	private List<Result> getViaHTableBatchCall(final HTableInterface logTable,
+			final HTableInterface dataTable, final DistTxnState transactionState,
 			final List<Get> gets) throws Throwable {
 		long trxId = transactionState.getTransactionId();
 		

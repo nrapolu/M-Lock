@@ -1,5 +1,7 @@
 package ham.wal;
 
+import ham.wal.scheduler.RequestPriority;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -10,6 +12,7 @@ import java.util.concurrent.Callable;
 
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.client.HTable;
+import org.apache.hadoop.hbase.client.HTableInterface;
 import org.apache.hadoop.hbase.client.HTablePool;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
@@ -20,8 +23,8 @@ public class TPCCNewOrderTrxExecutorClusteredPartitioning extends
 		Callable<DistTrxExecutorReturnVal> {
 	String[] tokens = null;
 	HTablePool tablePool = null;
-	HTable dataTable = null;
-	HTable logTable = null;
+	HTableInterface dataTable = null;
+	HTableInterface logTable = null;
 	int thinkingTime;
 	int lenOfTrx;
 	long trxId;
@@ -36,14 +39,14 @@ public class TPCCNewOrderTrxExecutorClusteredPartitioning extends
 	long customerId;
 
 	public TPCCNewOrderTrxExecutorClusteredPartitioning(String[] tokens,
-			byte[] dataTableName, byte[] logTableName, HTablePool tablePool,
+			HTable dataTable, HTable logTable,
 			WALManagerDistTxnClient walManagerDistTxnClient, int thinkingTime,
 			int lenOfTrx, int contentionOrder, boolean migrateLocks)
 			throws IOException {
 		this.tokens = tokens;
 		this.tablePool = tablePool;
-		this.dataTable = (HTable) this.tablePool.getTable(dataTableName);
-		this.logTable = (HTable) this.tablePool.getTable(logTableName);
+		this.dataTable = dataTable;
+		this.logTable = logTable;
 		this.thinkingTime = thinkingTime;
 		this.lenOfTrx = lenOfTrx;
 		this.contentionOrder = contentionOrder;
@@ -52,7 +55,7 @@ public class TPCCNewOrderTrxExecutorClusteredPartitioning extends
 	}
 
 	public static void sysout(long trxId, String otp) {
-		// System.out.println(trxId + " : " + otp);
+		 //System.out.println(trxId + " : " + otp);
 	}
 
 	public static Map<String, List<String>> getLogsToDataKeysMap(String[] keys) {
@@ -172,7 +175,7 @@ public class TPCCNewOrderTrxExecutorClusteredPartitioning extends
 			// List<Result> results = walManagerDistTxnClient.getWithServerSideMerge(
 			// logTable, dataTable, transactionState, gets);
 			List<Result> results = walManagerDistTxnClient.get(logTable, dataTable,
-					transactionState, gets);
+					transactionState, gets, RequestPriority.OCC_READ_PHASE);
 			long endReadTime = System.currentTimeMillis();
 
 			// Grab the information we need from the results.
@@ -421,14 +424,6 @@ public class TPCCNewOrderTrxExecutorClusteredPartitioning extends
 		} catch (Throwable e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
-		} finally {
-			try {
-				this.dataTable.close();
-				this.logTable.close();
-			} catch (IOException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			}
 		}
 		return retVal;
 	}

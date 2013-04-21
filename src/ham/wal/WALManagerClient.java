@@ -7,6 +7,8 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.client.HTable;
+import org.apache.hadoop.hbase.client.HTableInterface;
+import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.coprocessor.*;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 
@@ -70,7 +72,7 @@ public class WALManagerClient {
   public boolean commit(final HTable table, final LogId id, final Check check,
   		final List<Write> writes, final List<ImmutableBytesWritable> toBeUnlockedKeys,
   		final List<Integer> commitTypeInfo) throws Throwable {
-    class CommitCallBack implements Batch.Callback<Boolean> {
+  	class CommitCallBack implements Batch.Callback<Boolean> {
     	Boolean commitResult = null;
 
       Boolean getCommitResult() {
@@ -93,5 +95,15 @@ public class WALManagerClient {
       }
     }, aCommitCallBack);
     return aCommitCallBack.getCommitResult();
-  }  
+  }
+  
+  // Methods for local transactions. For now, we assume that local transactions operate 
+  // on entity groups of size 1. So we simply do a checkAndPut operation to acquire the writeLock,
+  // and place the Put. We do this using normal HTable API. 
+  // We don't go through the WALManager implemented as coprocessorEndpoint.
+  // This is done so as to insulate Local Trx from Global Trx while scheduling at HBase RPC.
+  public boolean checkAndPut(HTableInterface dataTable, HTableInterface logTable, byte[] row, byte[] family, byte[] qualifier, 
+  		byte[] value, Put put) throws IOException {
+  	return dataTable.checkAndPut(row, family, qualifier, value, put);
+  }
 }
