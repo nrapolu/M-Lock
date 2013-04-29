@@ -22,7 +22,7 @@ public class WALManagerDistTxnClientRefactored extends WALManagerDistTxnClient {
 
 	public List<Result> get(final HTableInterface logTable,
 			final HTableInterface dataTable, final DistTxnState transactionState,
-			final List<Get> gets) throws Throwable {
+			final List<Get> gets, int requestPriorityTag) throws Throwable {
 		return getViaHTableBatchCall(logTable, dataTable, transactionState, gets);
 	}
 	

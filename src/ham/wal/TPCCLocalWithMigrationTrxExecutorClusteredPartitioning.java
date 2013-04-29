@@ -16,7 +16,7 @@ import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.util.Bytes;
 
-public class TPCCLocalTrxExecutorClusteredPartitioning extends
+public class TPCCLocalWithMigrationTrxExecutorClusteredPartitioning extends
 		TPCCTablePropertiesClusteredPartitioning implements
 		Callable<DistTrxExecutorReturnVal> {
 	String[] tokens = null;
@@ -35,7 +35,7 @@ public class TPCCLocalTrxExecutorClusteredPartitioning extends
 	long districtId;
 	long customerId;
 
-	public TPCCLocalTrxExecutorClusteredPartitioning(String[] tokens,
+	public TPCCLocalWithMigrationTrxExecutorClusteredPartitioning(String[] tokens,
 			HTable dataTable, HTable logTable,
 			WALManagerDistTxnClient walManagerDistTxnClient, int thinkingTime,
 			int lenOfTrx, int contentionOrder, boolean migrateLocks)
@@ -166,26 +166,123 @@ public class TPCCLocalTrxExecutorClusteredPartitioning extends
 			// Since we aren't really dealing with the data object, we just check for lock, place lock
 			// and unlock, all on the lock object.
 			LogId logId = getLogIdForKey(Bytes.toBytes(keyForStockTable));
-			byte[] finalKeyForStockTable = Bytes.toBytes(Bytes.toString(logId.getKey())
+			byte[] keyForStockTableLock = Bytes.toBytes(Bytes.toString(logId.getKey())
 					+ logAndKeySeparator + keyForStockTable);
+			Get g = new Get(keyForStockTableLock);
+			g.setTimeStamp(appTimestamp);
+			g.addColumn(WALTableProperties.WAL_FAMILY, writeLockColumn);
+			g.addColumn(WALTableProperties.WAL_FAMILY,
+					WALTableProperties.regionObserverMarkerColumn);
+			g.addColumn(WALTableProperties.WAL_FAMILY,
+					WALTableProperties.isLockMigratedColumn);
+			g.addColumn(WALTableProperties.WAL_FAMILY,
+					WALTableProperties.isLockPlacedOrMigratedColumn);
+			g.addColumn(WALTableProperties.WAL_FAMILY,
+					WALTableProperties.destinationKeyColumn);
+			g.addColumn(WALTableProperties.WAL_FAMILY, ltFrequencyColumn);
 
-			Put put = new Put(finalKeyForStockTable);
-			put.add(WALTableProperties.WAL_FAMILY, writeLockColumn, appTimestamp, Bytes.toBytes(zero));
-			put.add(WALTableProperties.WAL_FAMILY,
+			long startCommitTime = System.currentTimeMillis();
+			Result stockVal = dataTable.get(g);
+			long newLTFrequency = Bytes.toLong(stockVal.getColumnLatest(WAL_FAMILY, 
+					ltFrequencyColumn).getValue()) + 1;
+
+			Put putForData = new Put(keyForStockTableLock);
+			putForData.add(WALTableProperties.WAL_FAMILY, writeLockColumn, 
+					appTimestamp, Bytes.toBytes(zero));
+			putForData.add(WALTableProperties.WAL_FAMILY,
 					WALTableProperties.regionObserverMarkerColumn, appTimestamp,
 					WALTableProperties.randomValue);
-			put.setWriteToWAL(true);
+			putForData.add(WAL_FAMILY, ltFrequencyColumn, appTimestamp,
+					Bytes.toBytes(newLTFrequency));
+			putForData.setWriteToWAL(true);
+						
+			// Check if the lock is migrated. If so, retrieve the M-WAL key and use that to acquire lock.
+			long isLockPlacedOrMigrated = Bytes.toLong(stockVal.getColumnLatest(
+					WALTableProperties.WAL_FAMILY,
+					WALTableProperties.isLockPlacedOrMigratedColumn).getValue());
 			
-			long startCommitTime = System.currentTimeMillis();
-			boolean commitResponse = walManagerDistTxnClient.checkAndPut(dataTable, logTable,
-					finalKeyForStockTable, WALTableProperties.WAL_FAMILY,
-					writeLockColumn, Bytes.toBytes(zero), put);
-			if (!commitResponse) {
-				// We abort here.
-				countOfAborts++;
-				return new DistTrxExecutorReturnVal(tokens, countOfAborts,
-						tokens.length);
+			boolean commitResponse = false;
+			if (isLockPlacedOrMigrated == 0) { 
+				// Ideally, version check on the dataItem should also happen via checkAndPut.
+				// However, HBase currently provides only single column check per request.
+				// Once we make checkAndPut a first class function with multiple arguments, we
+				// can extend this.
+				commitResponse = walManagerDistTxnClient.checkAndPut(dataTable, logTable,
+						keyForStockTableLock, WALTableProperties.WAL_FAMILY,
+						writeLockColumn, Bytes.toBytes(zero), putForData);
 			}
+			
+			if (!commitResponse) {
+				// Try using DT protocol instead of LT.
+				// Find out the key at which lock is present, and try acquiring it. Default is H-WAL.
+				byte[] finalKeyForLock = keyForStockTableLock;
+				// If lock is found migrated, then get the M-WAL lock location.
+				long isLockMigrated = Bytes.toLong(stockVal.getColumnLatest(
+						WALTableProperties.WAL_FAMILY,
+						WALTableProperties.isLockMigratedColumn).getValue());
+				
+				if (isLockMigrated == 1) {
+					finalKeyForLock = stockVal.getColumnLatest(
+							WALTableProperties.WAL_FAMILY,
+							WALTableProperties.destinationKeyColumn).getValue();					
+				}
+
+				Put putForLock = new Put(finalKeyForLock);
+				putForLock.add(WALTableProperties.WAL_FAMILY, writeLockColumn, 
+						appTimestamp, Bytes.toBytes(one));
+				putForLock.add(WALTableProperties.WAL_FAMILY,
+						WALTableProperties.regionObserverMarkerColumn, appTimestamp,
+						WALTableProperties.randomValue);
+				putForLock.setWriteToWAL(true);
+				
+				int maxRetryCount = 5;
+				while (!commitResponse && maxRetryCount > 0) {
+					// Acquire the lock. 
+					// There are two reasons for acquireLock operation to fail. Either the lock position
+					// changed in the mean time, or the lock was taken by others. 
+					// In the current checkAndPut operation semantics, we can't detect the first situation.
+					// Therefore, checkAndPut on the writeLockColumn retries for maxRetryCount and if it
+					// does not get the lock, it assumes that the migration information changed. 
+					// The above method works only if the M-WAL lock is deleted whenever it is repatriated.
+					// Then because checkAndPut will not find the lock key, it will return false.
+					// On the other hand, if repatriation is not deleting the lock on M-WAL, but simply
+					// changing the isLockMigratedColumn, then the following checkAndPut will go through
+					// even though there is no lock present at M-WAL.
+					commitResponse = walManagerDistTxnClient.checkAndPut(dataTable, logTable,
+							finalKeyForLock, WALTableProperties.WAL_FAMILY,
+							writeLockColumn, Bytes.toBytes(zero), putForLock);
+					maxRetryCount--;
+				}
+
+				// Abort if LT could not get the lock even after retries.
+				if (!commitResponse) {
+					// We abort here.
+					countOfAborts++;
+					return new DistTrxExecutorReturnVal(tokens, countOfAborts,
+							tokens.length);
+				}
+
+				// Commit data at H-WAL.
+				commitResponse = walManagerDistTxnClient.checkAndPut(dataTable, logTable,
+						keyForStockTableLock, WALTableProperties.WAL_FAMILY,
+						writeLockColumn, Bytes.toBytes(zero), putForData);
+				
+				// Unlock at M-WAL
+				Put putForUnlock = new Put(finalKeyForLock);
+				putForUnlock.add(WALTableProperties.WAL_FAMILY, writeLockColumn, 
+						appTimestamp, Bytes.toBytes(zero));
+				putForUnlock.add(WALTableProperties.WAL_FAMILY,
+						WALTableProperties.regionObserverMarkerColumn, appTimestamp,
+						WALTableProperties.randomValue);
+				putForData.add(WAL_FAMILY, ltFrequencyColumn, appTimestamp,
+						Bytes.toBytes(newLTFrequency));
+				putForUnlock.setWriteToWAL(true);
+				
+				commitResponse = walManagerDistTxnClient.checkAndPut(dataTable, logTable,
+						finalKeyForLock, WALTableProperties.WAL_FAMILY,
+						writeLockColumn, Bytes.toBytes(one), putForUnlock);
+			}
+						
 			long endCommitTime = System.currentTimeMillis();
 			long commitTime = (endCommitTime - startCommitTime);
 			

@@ -48,7 +48,7 @@ import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.HashedBytes;
 import org.apache.hadoop.hbase.util.Pair;
 
-public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
+public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpaceRefactored
 		implements WALManagerDistTxnProtocol {
 
 	byte[] dataFamily = WALTableProperties.dataFamily;
@@ -1383,14 +1383,14 @@ public class WALManagerDistTxnEndpoint extends WALManagerEndpointForMyKVSpace
 
 			// Prepare a check object and commit the write-set with optimistic
 			// checks. In this case, we didn't have any reads, so the check object
-			// will be empty. However, the Check needs to have a timestamp even if
-			// there aren't any
-			// readSets in it -- this is a crap we have to deal with in-order to avoid
-			// heavy refactoring
-			// of the code in EndpointForMyKVSpace.
-			Snapshot snapshot = this.start(logId);
+			// will be empty. We don't even get a snapshot and stuff since the commit function never
+			// stores anything in the WAL snapshot, it always flushes writes down to the region hosting data.
+			// -- which in our design resides on the same node hosting the log. 
+			// Since we moved to the new commit function in 
+			// WALManagerEndpointForMyKVSpaceRefactored, we don't need any meaningful timestamp for check. 
+			// We simply mark its timestamp as -1.
 			final Check check = new Check();
-			check.setTimestamp(snapshot.getTimestamp());
+			check.setTimestamp(-1);
 
 			// Commit the check object and the write-sets.
 			// boolean commitResponse = super.commit(logId, check, finalWrites, null);

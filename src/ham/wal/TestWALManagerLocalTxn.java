@@ -198,7 +198,7 @@ public class TestWALManagerLocalTxn {
 				// TPCCPessimisticNewOrderTrxExecutor trxExecutor = new
 				// TPCCPessimisticNewOrderTrxExecutor(
 				// TPCCNewOrderTrxExecutor trxExecutor = new TPCCNewOrderTrxExecutor(
-				TPCCLocalTrxExecutorClusteredPartitioning trxExecutor = new TPCCLocalTrxExecutorClusteredPartitioning(
+				TPCCLocalWithMigrationTrxExecutorClusteredPartitioning trxExecutor = new TPCCLocalWithMigrationTrxExecutorClusteredPartitioning(
 						tokens, dataTable, walTable, walManagerDistTxnClient, thinkingTime,
 						lenOfTrx, contentionOrder, doMigrateLocks);
 				threadId++;

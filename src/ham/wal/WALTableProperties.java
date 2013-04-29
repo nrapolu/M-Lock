@@ -21,7 +21,8 @@ import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.util.Bytes;
 
 public class WALTableProperties {
-	public final static String WAL_TABLENAME = "WAL_Table";
+	public final static String WAL_TABLENAME = "DATA_TABLE";
+	public final static String DATA_TABLENAME = "DATA_TABLE";
 	public final static byte[] WAL_FAMILY = Bytes.toBytes("WAL_FAMILY");
 	public final static byte[] CURRENT_TS_COL = Bytes.toBytes("CURRENT_TS");
 	public final static byte[] SYNC_TS_COL = Bytes.toBytes("SYNC_TS_COL");
@@ -29,9 +30,8 @@ public class WALTableProperties {
 	public final static byte[] WAL_ENTRY_COL = Bytes.toBytes("WAL_ENTRY_COL");
 	public final static long GENERIC_TIMESTAMP = 1;
 
-	public final static byte[] dataTableName = Bytes.toBytes("DATA_TABLE");
-	// final static byte[] walTableName = Bytes.toBytes(WAL_TABLENAME);
-	public final static byte[] walTableName = Bytes.toBytes("DATA_TABLE");
+	public final static byte[] dataTableName = Bytes.toBytes(DATA_TABLENAME);
+	public final static byte[] walTableName = Bytes.toBytes(WAL_TABLENAME);
 	public final static byte[] dataFamily = Bytes.toBytes("DATA_FAMILY");
 	public final static byte[] dataColumn = Bytes.toBytes("DATA_COLUMN");
 	public final static byte[] versionColumn = Bytes.toBytes("VERSION_COLUMN");
@@ -50,9 +50,10 @@ public class WALTableProperties {
 	public byte[] logFamily = WALTableProperties.WAL_FAMILY;
 	public static long appTimestamp = GENERIC_TIMESTAMP;
 
-	static long zero = 0;
-	static long one = 1;
-	static long two = 2;
+	public static long zero = 0;
+	public static long one = 1;
+	public static long two = 2;
+	public static double zero_double = 0;
 	// Random entries to be used inside Put[] based transactions.
 	static byte[] randomColumn = Bytes.toBytes("RANDOM_COLUMN");
 	static byte[] randomValue = Bytes.toBytes("RANDOM_VALUE");

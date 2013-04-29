@@ -18,7 +18,7 @@ import org.apache.hadoop.hbase.util.Bytes;
 
 public class TPCCTablePropertiesClusteredPartitioning extends
 		TPCCTableProperties {
-
+	private static boolean isStockTableRangePartitioned = true;
 	static HashMap<Long, String> warehouseKeyMap = new HashMap<Long, String>();
 	static HashMap<Long, String> toBePrependedStringMapForMigratedLocks = new HashMap<Long, String>();
 
@@ -191,7 +191,14 @@ public class TPCCTablePropertiesClusteredPartitioning extends
 	}
 
 	public String createStockTableKey(long warehouseId, long itemId) {
+		if (isStockTableRangePartitioned)
+			return createStockTableKeyForRangePartitioning(warehouseId, itemId);
 		return warehouseKeyMap.get(warehouseId) + ":" + Long.toString(itemId) + ":"
+				+ "stock";
+	}
+	
+	public String createStockTableKeyForRangePartitioning(long warehouseId, long itemId) {
+		return Long.toString(itemId) + ":" + warehouseKeyMap.get(warehouseId) + ":" 
 				+ "stock";
 	}
 
@@ -436,6 +443,9 @@ public class TPCCTablePropertiesClusteredPartitioning extends
 				p
 						.add(WAL_FAMILY, regionObserverMarkerColumn, appTimestamp,
 								randomValue);
+				p.add(WAL_FAMILY, dtFrequencyColumn, appTimestamp, Bytes.toBytes(zero));
+				p.add(WAL_FAMILY, ltFrequencyColumn, appTimestamp, Bytes.toBytes(zero));
+				p.add(WAL_FAMILY, runningAvgForDTProportionColumn, appTimestamp, Bytes.toBytes(zero_double));
 				p.setWriteToWAL(false);
 				logTable.put(p);
 			}
@@ -486,6 +496,10 @@ public class TPCCTablePropertiesClusteredPartitioning extends
 				p
 						.add(WAL_FAMILY, regionObserverMarkerColumn, appTimestamp,
 								randomValue);
+				p.add(WAL_FAMILY, dtFrequencyColumn, appTimestamp, Bytes.toBytes(zero));
+				p.add(WAL_FAMILY, ltFrequencyColumn, appTimestamp, Bytes.toBytes(zero));
+				p.add(WAL_FAMILY, runningAvgForDTProportionColumn, appTimestamp,
+						Bytes.toBytes(zero_double));
 				p.setWriteToWAL(false);
 				logTable.put(p);
 			}

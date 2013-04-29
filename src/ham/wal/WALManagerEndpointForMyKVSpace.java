@@ -81,7 +81,7 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 	protected Configuration conf = null;
 	private StoreUpdaterForMyKVSpace storeUpdater = null;
 	private boolean stopped = false;
-
+	
 	public static void sysout(String otp) {
 		// System.out.println(otp);
 	}
@@ -96,8 +96,8 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 		// hardcode them
 		// and assume that transactions will themselves trigger the asynchronous
 		// flush when they need.
-		this.storeUpdater = new StoreUpdaterForMyKVSpace(this, 10 * 60 * 1000,
-				50 * 60 * 1000);
+		//this.storeUpdater = new StoreUpdaterForMyKVSpace(this, 10 * 60 * 1000,
+		//		50 * 60 * 1000);
 
 		UncaughtExceptionHandler handler = new UncaughtExceptionHandler() {
 			public void uncaughtException(Thread t, Throwable e) {
@@ -118,7 +118,8 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 		// TODO Auto-generated method stub
 		super.stop(env);
 		this.stopped = true;
-		this.storeUpdater.interruptIfNecessary();
+		if (this.storeUpdater != null)
+			this.storeUpdater.interruptIfNecessary();
 	}
 
 	public boolean isStopped() {
@@ -1328,6 +1329,8 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 				WALTableProperties.destinationKeyColumn);
 		g.addColumn(WALTableProperties.WAL_FAMILY,
 				WALTableProperties.regionObserverMarkerColumn);
+		g.addColumn(WALTableProperties.WAL_FAMILY,
+				TPCCTableProperties.runningAvgForDTProportionColumn);
 		g.setTimeStamp(WALTableProperties.appTimestamp);
 		Result r = null;
 		if (HRegion.rowIsInRange(region.getRegionInfo(), tableCachedLock)) {
@@ -1340,6 +1343,15 @@ public class WALManagerEndpointForMyKVSpace extends BaseEndpointCoprocessor
 				if (isLockPlacedOrMigratedColumnInfo == WALTableProperties.one) {
 					// Some other transaction placed a migration or locked in-place.
 					canAttemptMigration = false;
+				}
+				
+				// Do a check for the running average of DT proportion to ensure that 
+				// the lock is eligible for migration.
+				if (canAttemptMigration) {
+					double runningAvgDtProportion = Bytes.toDouble(r.getValue(WALTableProperties.WAL_FAMILY, 
+							TPCCTableProperties.runningAvgForDTProportionColumn));
+					if (runningAvgDtProportion < TPCCTableProperties.dtProportionUpperThreshold)
+						canAttemptMigration = false;
 				}
 			}
 		}

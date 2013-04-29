@@ -155,10 +155,11 @@ public class TestWALManagerDistTxn {
 		HTable dataTable = new HTable(conf, WALTableProperties.dataTableName);
 		HTable walTable = new HTable(conf, WALTableProperties.walTableName);
 
-		// Change this accordingly.
-		WALManagerDistTxnClient walManagerDistTxnClient = new WALManagerDistTxnClient();
-		// WALManagerDistTxnClient walManagerDistTxnClient = new
-		// WALManagerDistTxnClientRefactored();
+		// Change this to tag "gets" and "versionCheck" requests go through Exec functionality.
+		// By doing that, we can assign priority to their operations at the RPC scheduler.
+		// WALManagerDistTxnClient walManagerDistTxnClient = new WALManagerDistTxnClient();
+		WALManagerDistTxnClient walManagerDistTxnClient = new
+		 WALManagerDistTxnClientRefactored();
 
 		long outerLoopStartTime = System.currentTimeMillis();
 		while (true) {

@@ -46,6 +46,13 @@ public class TPCCTableProperties extends WALTableProperties {
 	static byte[] orderLineQuantityColumn = Bytes.toBytes("OL_QUANTITY");
 	static byte[] orderLineAmountColumn = Bytes.toBytes("OL_AMOUNT");
 
+	public static String dtFreqColumnStr = "DT_FREQ";
+	public static byte[] dtFrequencyColumn = Bytes.toBytes(dtFreqColumnStr);
+	public static String ltFreqColumnStr = "LT_FREQ";
+	public static byte[] ltFrequencyColumn = Bytes.toBytes(ltFreqColumnStr);
+	public static String runningAvgColumnStr = "RUNNING_AVG_DT_PROPORTION";
+	public static byte[] runningAvgForDTProportionColumn = Bytes.toBytes(runningAvgColumnStr);
+	
 	static String orderWALPrefix = "!";
 	static String districtWALPrefix = "=";
 
@@ -72,9 +79,15 @@ public class TPCCTableProperties extends WALTableProperties {
 	public static int trxLen = 10;
 	public static int maxHops = 100;
 	
+	public static double dtProportionUpperThreshold = 0.7;
+	public static double dtProportionLowerThreshold = 0.3;
+	
+	public static long trxSumThresholdForRunningAvgEvaluation = 1000;
+	public static double weightForOldRunningAvg = 0.9;
+	public static double weightForNewRunningAvg = 0.1; 
+	
 	public TPCCTableProperties(Configuration conf, HBaseAdmin admin) {
 		super(conf, admin);
-		// TODO Auto-generated constructor stub
 	}
 
 	public void createAndPopulateTable(long numEntries, long numSplits)

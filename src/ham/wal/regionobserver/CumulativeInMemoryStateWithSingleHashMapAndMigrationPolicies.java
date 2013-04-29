@@ -1,20 +1,17 @@
 package ham.wal.regionobserver;
 
+import ham.wal.TPCCTableProperties;
+
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.NavigableMap;
 import java.util.NavigableSet;
-import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentNavigableMap;
-import java.util.concurrent.ConcurrentSkipListMap;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.client.Delete;
@@ -23,8 +20,7 @@ import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 
-public class CumulativeInMemoryStateWithSingleHashMap {
-
+public class CumulativeInMemoryStateWithSingleHashMapAndMigrationPolicies {
 	private static final Log LOG = LogFactory
 			.getLog(CumulativeInMemoryStateWithSingleHashMap.class);
 	private final HRegionInfo regionInfo;
@@ -40,10 +36,11 @@ public class CumulativeInMemoryStateWithSingleHashMap {
 	private List<Delete> deletes = new LinkedList<Delete>();
 
 	private void sysout(String line) {
-		//System.out.println(line);
+		// System.out.println(line);
 	}
 
-	public CumulativeInMemoryStateWithSingleHashMap(HRegionInfo regionInfo) {
+	public CumulativeInMemoryStateWithSingleHashMapAndMigrationPolicies(
+			HRegionInfo regionInfo) {
 		super();
 		this.regionInfo = regionInfo;
 	}
@@ -100,9 +97,102 @@ public class CumulativeInMemoryStateWithSingleHashMap {
 			for (KeyValue kv : kvList) {
 				String colStr = Bytes.toString(kv.getQualifier());
 				StringBuffer keyStrBuffer = new StringBuffer();
-				keyStrBuffer.append(row).append(SEPARATOR).append(familyStr).append(colStr);
+				keyStrBuffer.append(row).append(SEPARATOR).append(familyStr).append(
+						colStr);
 				keyStrBuffer.append(SEPARATOR).append(kv.getTimestamp());
 				String key = keyStrBuffer.toString();
+
+				boolean isLTorDT = false;
+				long currentCountOfDTFreq = 0;
+				long currentCountOfLTFreq = 0;
+				if (colStr.startsWith(TPCCTableProperties.dtFreqColumnStr)) {
+					KeyValue fromStoreKV = myInMemStore.get(key);
+					if (fromStoreKV != null) {
+						isLTorDT = true;
+						// Note that we added +1 to account for this trx.
+						currentCountOfDTFreq = Bytes.toLong(fromStoreKV.getValue()) + 1;
+
+						// Create key to fetch ltFreq. Use it to calculate new runningAvg if
+						// needed.
+						StringBuffer ltFreqKeyStrBuffer = new StringBuffer();
+						ltFreqKeyStrBuffer.append(row).append(SEPARATOR).append(familyStr)
+								.append(TPCCTableProperties.ltFreqColumnStr);
+						ltFreqKeyStrBuffer.append(SEPARATOR).append(kv.getTimestamp());
+						currentCountOfLTFreq = Bytes.toLong(myInMemStore.get(
+								ltFreqKeyStrBuffer.toString()).getValue());
+
+						if (currentCountOfLTFreq + currentCountOfDTFreq
+								% TPCCTableProperties.trxSumThresholdForRunningAvgEvaluation != 0) {
+							KeyValue newKeyWithUpdatedDTFreq = new KeyValue(kv.getRow(), kv
+									.getFamily(), kv.getQualifier(), Bytes
+									.toBytes(currentCountOfDTFreq));
+							myInMemStore.put(key, newKeyWithUpdatedDTFreq);
+							continue;
+						}
+					}
+				} else if (colStr.startsWith(TPCCTableProperties.ltFreqColumnStr)) {
+					KeyValue fromStoreKV = myInMemStore.get(key);
+					if (fromStoreKV != null) {
+						isLTorDT = true;
+						// Note that we added +1 to account for this trx.
+						currentCountOfLTFreq = Bytes.toLong(fromStoreKV
+								.getValue()) + 1;
+
+						// Create key to fetch dtFreq. Use it to calculate new runningAvg if
+						// needed.
+						StringBuffer dtFreqKeyStrBuffer = new StringBuffer();
+						dtFreqKeyStrBuffer.append(row).append(SEPARATOR).append(familyStr)
+								.append(TPCCTableProperties.dtFreqColumnStr);
+						dtFreqKeyStrBuffer.append(SEPARATOR).append(kv.getTimestamp());
+						currentCountOfDTFreq = Bytes.toLong(myInMemStore.get(
+								dtFreqKeyStrBuffer.toString()).getValue());
+
+						if (currentCountOfLTFreq + currentCountOfDTFreq
+								% TPCCTableProperties.trxSumThresholdForRunningAvgEvaluation != 0) {
+							KeyValue newKeyWithUpdatedLTFreq = new KeyValue(kv.getRow(), kv
+									.getFamily(), kv.getQualifier(), Bytes
+									.toBytes(currentCountOfLTFreq));
+							myInMemStore.put(key, newKeyWithUpdatedLTFreq);
+							continue;
+						}
+					}
+				}
+
+				// If code reached here and isLTorDT, then it is time to change the
+				// runningAvg.
+				if (isLTorDT
+						&& currentCountOfLTFreq + currentCountOfDTFreq
+								% TPCCTableProperties.trxSumThresholdForRunningAvgEvaluation == 0) {
+					// create key for runningAvg. Fetch it and update it
+					StringBuffer runningAvgKeyStrBuffer = new StringBuffer();
+					runningAvgKeyStrBuffer.append(row).append(SEPARATOR)
+							.append(familyStr)
+							.append(TPCCTableProperties.runningAvgColumnStr);
+					runningAvgKeyStrBuffer.append(SEPARATOR).append(kv.getTimestamp());
+					double currentRunningAvg = Bytes.toDouble(myInMemStore.get(
+							runningAvgKeyStrBuffer.toString()).getValue());
+
+					double newRunningAvg = TPCCTableProperties.weightForOldRunningAvg
+							* currentRunningAvg
+							+ TPCCTableProperties.weightForNewRunningAvg
+							* (currentCountOfDTFreq / (currentCountOfDTFreq + currentCountOfLTFreq));
+
+					KeyValue newKeyWithUpdatedDTFreq = new KeyValue(kv.getRow(), kv
+							.getFamily(), TPCCTableProperties.dtFrequencyColumn, Bytes
+							.toBytes(TPCCTableProperties.zero));
+					KeyValue newKeyWithUpdatedLTFreq = new KeyValue(kv.getRow(), kv
+							.getFamily(), TPCCTableProperties.ltFrequencyColumn, Bytes
+							.toBytes(TPCCTableProperties.zero));
+					KeyValue newKeyWithUpdatedRunningAvg = new KeyValue(kv.getRow(), kv
+							.getFamily(),
+							TPCCTableProperties.runningAvgForDTProportionColumn, Bytes
+									.toBytes(newRunningAvg));
+
+					myInMemStore.put(key, newKeyWithUpdatedDTFreq);
+					myInMemStore.put(key, newKeyWithUpdatedLTFreq);
+					myInMemStore.put(key, newKeyWithUpdatedRunningAvg);
+					continue;
+				}
 
 				sysout("InMemStore##: Putting at timestamp: " + kv.getTimestamp()
 						+ ", is this kv: " + kv.toString());
@@ -281,11 +371,11 @@ public class CumulativeInMemoryStateWithSingleHashMap {
 						sysout("TAKING ALL VERSIONS!");
 						long defaultTimestamp = 1;
 						String key = startRow + SEPARATOR + famStr + SEPARATOR
-							+ Bytes.toString(col) + SEPARATOR + defaultTimestamp;
+								+ Bytes.toString(col) + SEPARATOR + defaultTimestamp;
 						KeyValue kv = myInMemStore.get(key);
 						if (kv != null) {
-							sysout("Adding to kvList, timestamp: " + defaultTimestamp + ", kv: "
-							+ kv.toString());
+							sysout("Adding to kvList, timestamp: " + defaultTimestamp
+									+ ", kv: " + kv.toString());
 							kvList.add(kv);
 						}
 					} else {// Go with the timestamp range.

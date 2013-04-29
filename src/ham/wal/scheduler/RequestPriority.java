@@ -38,7 +38,9 @@ public class RequestPriority implements Comparable<RequestPriority>, Writable {
 
 	public void setExecRequestPriorityTag() {
 		Exec exec = new Exec();
-		exec.setRequestPriorityTag(getRequestPriorityTag());
+		// TODO: Uncomment this for the scheduler to work. If uncommented, it won't compile
+		// with old hbase-0.94.6 as it doesn't have Exec class modified.
+		//exec.setRequestPriorityTag(getRequestPriorityTag());
 	}
 	
 	public int getPhaseId() {
