@@ -39,6 +39,7 @@ public class CumulativeInMemoryStateWithSingleHashMap {
 
 	private List<Delete> deletes = new LinkedList<Delete>();
 
+	private boolean debug = false;
 	private void sysout(String line) {
 		//System.out.println(line);
 	}
@@ -87,7 +88,8 @@ public class CumulativeInMemoryStateWithSingleHashMap {
 	}
 
 	public void addPut(final Put write) {
-		sysout("In addPut, about to insert Put: " + write.toString());
+		if (debug)
+			sysout("In addPut, about to insert Put: " + write.toString());
 		// Timestamps inside KeyValues will be updated only when they are marked as
 		// LATEST_TIMESTAMP.
 		updateLatestTimestamp(write.getFamilyMap().values(), EnvironmentEdgeManager
@@ -100,11 +102,13 @@ public class CumulativeInMemoryStateWithSingleHashMap {
 			for (KeyValue kv : kvList) {
 				String colStr = Bytes.toString(kv.getQualifier());
 				StringBuffer keyStrBuffer = new StringBuffer();
-				keyStrBuffer.append(row).append(SEPARATOR).append(familyStr).append(colStr);
+				keyStrBuffer.append(row).append(SEPARATOR).append(familyStr).
+					append(SEPARATOR).append(colStr);
 				keyStrBuffer.append(SEPARATOR).append(kv.getTimestamp());
 				String key = keyStrBuffer.toString();
 
-				sysout("InMemStore##: Putting at timestamp: " + kv.getTimestamp()
+				if (debug) 
+					sysout("InMemStore##: Putting at timestamp: " + kv.getTimestamp()
 						+ ", is this kv: " + kv.toString());
 				myInMemStore.put(key, kv);
 			}
@@ -170,10 +174,12 @@ public class CumulativeInMemoryStateWithSingleHashMap {
 					// Deleting a specific column for a specific timestamp.
 					String delCol = Bytes.toString(kv.getQualifier());
 					Long timestamp = kv.getTimestamp();
-					String key = row + SEPARATOR + familyStr + SEPARATOR + delCol
-							+ SEPARATOR + timestamp;
-
-					if (myInMemStore.get(key) == null) {
+					
+					StringBuffer strBuf = new StringBuffer();
+					strBuf.append(row).append(SEPARATOR).append(familyStr).append(SEPARATOR);
+					strBuf.append(delCol).append(SEPARATOR).append(timestamp);
+					
+					if (myInMemStore.get(strBuf.toString()) == null) {
 						// some one deleted the entire column, or probably there was never a
 						// column.
 						// Push this delete to the HRegion, so that the delete's effects are
@@ -191,7 +197,7 @@ public class CumulativeInMemoryStateWithSingleHashMap {
 					// scan know that it should ignore the value sent by the region, and
 					// essentially
 					// send nothing to the client.
-					myInMemStore.put(key, kv);
+					myInMemStore.put(strBuf.toString(), kv);
 					break;
 				}
 				case DeleteColumn: {
@@ -280,23 +286,31 @@ public class CumulativeInMemoryStateWithSingleHashMap {
 						// version number will be 1.
 						sysout("TAKING ALL VERSIONS!");
 						long defaultTimestamp = 1;
-						String key = startRow + SEPARATOR + famStr + SEPARATOR
-							+ Bytes.toString(col) + SEPARATOR + defaultTimestamp;
-						KeyValue kv = myInMemStore.get(key);
+						StringBuffer strBuf = new StringBuffer();
+						strBuf.append(startRow).append(SEPARATOR).append(famStr).append(SEPARATOR);
+						strBuf.append(Bytes.toString(col)).append(SEPARATOR).append(defaultTimestamp);
+						
+						KeyValue kv = myInMemStore.get(strBuf.toString());
 						if (kv != null) {
-							sysout("Adding to kvList, timestamp: " + defaultTimestamp + ", kv: "
-							+ kv.toString());
+							if (debug)
+								sysout("Adding to kvList, timestamp: " + defaultTimestamp + ", kv: "
+										+ kv.toString());
+							
 							kvList.add(kv);
 						}
 					} else {// Go with the timestamp range.
 						for (long i = startTimestamp; i < stopTimestamp
 								&& i < maxVersions + startTimestamp; i++) {
-							String key = startRow + SEPARATOR + famStr + SEPARATOR
-									+ Bytes.toString(col) + SEPARATOR + i;
-							KeyValue kv = myInMemStore.get(key);
+							StringBuffer strBuf = new StringBuffer();
+							strBuf.append(startRow).append(SEPARATOR).append(famStr).append(SEPARATOR);
+							strBuf.append(Bytes.toString(col)).append(SEPARATOR).append(i);
+							
+							KeyValue kv = myInMemStore.get(strBuf.toString());
 							if (kv != null) {
-								sysout("Adding to kvList, timestamp: " + i + ", kv: "
+								if (debug)
+									sysout("Adding to kvList, timestamp: " + i + ", kv: "
 										+ kv.toString());
+								
 								kvList.add(kv);
 							}
 						}

@@ -84,6 +84,7 @@ public class EfficientKVSpaceRegionObserver extends BaseRegionObserver {
 
 	CumulativeInMemoryStateWithSingleHashMap inMemState = null;
 
+	boolean debug = false;
 	private void sysout(String line) {
 		//System.out.println(line);
 	}
@@ -300,7 +301,9 @@ public class EfficientKVSpaceRegionObserver extends BaseRegionObserver {
 		List<KeyValue> kvsFromInMemoryStore = inMemState
 				.getAllKVsForASingleGet(scan);
 		Result inMemResult = new Result(kvsFromInMemoryStore);
-		sysout("Inside preGet, for scan: " + scan.toJSON() + 
+		
+		if (debug)
+			sysout("Inside preGet, for scan: " + scan.toJSON() + 
 				", InMemoryResult: " + inMemResult.toString());
 
 		// Verify that inMemStore returned results for all columns needed by Get.
@@ -347,6 +350,8 @@ public class EfficientKVSpaceRegionObserver extends BaseRegionObserver {
 			if (kvsFromRegion != null && !kvsFromRegion.isEmpty()) {
 				results.addAll(kvsFromRegion);
 				Result fromRegionResult = new Result(kvsFromRegion);
+				
+				if (debug)
 				sysout("Inside preGet, from region result: "
 						+ fromRegionResult.toString());
 			}
@@ -358,8 +363,10 @@ public class EfficientKVSpaceRegionObserver extends BaseRegionObserver {
 
 		Collections.sort(results, KeyValue.COMPARATOR);
 		
-		Result mergedResult = new Result(results);
-		sysout("Merged result: " + mergedResult.toString());
+		if (debug) {
+			Result mergedResult = new Result(results);
+			sysout("Merged result: " + mergedResult.toString());
+		}
 		
 		// BIGNOTE: The values fetched from the region can be stored in the
 		// InMemoryState. In that case,

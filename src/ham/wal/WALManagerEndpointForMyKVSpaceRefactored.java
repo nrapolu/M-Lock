@@ -6,11 +6,13 @@ import java.util.List;
 import java.util.TreeMap;
 import java.util.concurrent.CountDownLatch;
 
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.client.HTable;
+import org.apache.hadoop.hbase.client.HTableFactory;
 import org.apache.hadoop.hbase.client.HTableInterface;
 import org.apache.hadoop.hbase.client.HTablePool;
 import org.apache.hadoop.hbase.client.Put;
@@ -33,6 +35,7 @@ public class WALManagerEndpointForMyKVSpaceRefactored extends
 	private LinkedList<Row> putsToPlaceLocksAtMWAL = new LinkedList<Row>();
 	HTablePool tablePool = null;
 
+	private boolean debug = false;
 	public static void sysout(String otp) {
 		 //System.out.println(otp);
 	}
@@ -40,7 +43,19 @@ public class WALManagerEndpointForMyKVSpaceRefactored extends
 	@Override
 	public void start(org.apache.hadoop.hbase.CoprocessorEnvironment env) {
 		super.start(env);
-		this.tablePool = new HTablePool(env.getConfiguration(), 30);
+		this.tablePool = new HTablePool(env.getConfiguration(), 30,new HTableFactory() {
+			public HTableInterface createHTableInterface(Configuration config,
+					byte[] tableName) {
+				try {
+					HTable table = new HTable(config, tableName);
+					table.setAutoFlush(false);
+					table.setWriteBufferSize(100*1000);
+					return table;
+				} catch (IOException ioe) {
+					throw new RuntimeException(ioe);
+				}
+			}
+		});
 	}
 
 	public boolean commitToMemory(LogId id, Check check, List<Write> writes,
@@ -61,10 +76,13 @@ public class WALManagerEndpointForMyKVSpaceRefactored extends
 			currentTs++;
 			LogEntry newLogEntry = new LogEntry();
 			newLogEntry.setTimestamp(currentTs);
-			sysout("Adding the following writes to the log entry at timestamp: "
+			
+			if (debug) {
+				sysout("Adding the following writes to the log entry at timestamp: "
 					+ currentTs);
-			for (Write w : writes)
-				sysout(w.toString());
+				for (Write w : writes)
+					sysout(w.toString());
+			}
 
 			newLogEntry.setWrites(writes);
 
@@ -261,6 +279,7 @@ public class WALManagerEndpointForMyKVSpaceRefactored extends
 				canAttemptMigration = false;
 			}
 
+			/*
 			// Do a check for the running average of DT proportion to ensure that
 			// the lock is eligible for migration.
 			if (canAttemptMigration) {
@@ -271,6 +290,7 @@ public class WALManagerEndpointForMyKVSpaceRefactored extends
 				if (runningAvgDtProportion < TPCCTableProperties.dtProportionUpperThreshold)
 					canAttemptMigration = false;
 			}
+			*/
 		}
 		// Note that canAttemptMigration will return its default value of true if the Result r was empty.
 		// This is the case where no lock was present at H-WAL.
@@ -308,13 +328,14 @@ public class WALManagerEndpointForMyKVSpaceRefactored extends
 	public void placeLocksAtMWAL() throws IOException {
 		HTableInterface walTable = tablePool
 				.getTable(WALTableProperties.walTableName);
-		try {
-			walTable.batch(putsToPlaceLocksAtMWAL);
-		} catch (InterruptedException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		}
 
+		for (Row p: putsToPlaceLocksAtMWAL) {
+			if (debug)
+				sysout("Sending a remote put to place migrated lock for row: " + Bytes.toString(p.getRow())); 
+			walTable.put((Put)p);
+		}
+			
+		walTable.flushCommits();
 		// TODO: The above batch operation should always work if tried sufficient
 		// times.
 		// We can extend the above functionality to retry only a few times, and if
@@ -380,12 +401,15 @@ public class WALManagerEndpointForMyKVSpaceRefactored extends
 				WALTableProperties.isLockPlacedOrMigratedColumn,
 				CompareFilter.CompareOp.EQUAL, new BinaryComparator(Bytes
 						.toBytes(WALTableProperties.zero)), p, null, false);
-		sysout("For tableCachedLock: " + Bytes.toString(tableCachedLock)
+	
+		if (debug)
+			sysout("For tableCachedLock: " + Bytes.toString(tableCachedLock)
 				+ ", CheckAndMutate succeeded and so we placed the migration info ");
 
 		ImmutableBytesWritable finalLockPositionToReturn = null;
 		if (migrationResult = true) {
-			sysout("PLACED A DETOUR AT CACHED LOCK: "
+			if (debug)
+				sysout("PLACED A DETOUR AT CACHED LOCK: "
 					+ Bytes.toString(tableCachedLock));
 			finalLockPositionToReturn = new ImmutableBytesWritable(
 					selfPlacedDestinationKey);

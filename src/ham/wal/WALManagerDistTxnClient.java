@@ -1782,40 +1782,16 @@ public class WALManagerDistTxnClient extends WALManagerClient {
 				updates.add((Put) action.getAction());
 				LogId destLogId = LockMigrator.afterMigrationKeyMap
 						.get(new ImmutableBytesWritable(action.getAction().getRow()));
-				if (destLogId != null) {
-					// BIG NOTE: We are disabling "greedy eviction" for
-					// districtNextOrderId lock.
-					// We are doing this by making the update to lock in lock-table as
-					// ONLY_UNLOCK
-					// instead of ONLY_DELETE. This is what will ideally be done by the
-					// clustering
-					// process on the lock-table. The process won't evict this lock as it
-					// will
-					// be used frequently. It could evict the other locks, which are
-					// mostly
-					// for stock table, and also are infrequently re-used. Now, this
-					// change here
-					// is TPCC specific. We can't be doing this change in
-					// WALManagerDistTxnClient
-					// as its a very generic class. We need to figure out another way of
-					// doing this.
-					// Ideally, it should be done by the clustering process on the
-					// lock-table.
-					if (Bytes.toString(logId.getKey()).startsWith(
-							TPCCTableProperties.districtWALPrefix)) {
-						// sysout(trxId, "Found the district log Id: "
-						// + Bytes.toString(logId.getKey()));
-						// sysout(trxId, "GIVING ONLY_UNLOCK attribute for destLogId: "
-						// + destLogId.toString());
-						destLogId.setCommitType(LogId.ONLY_UNLOCK);
-					}
-					// BIGNOTE: We are disabling all deletes to debug deadlocks.
-					destLogId.setCommitType(LogId.ONLY_UNLOCK);
-					sysout(trxId, "Adding this destLogId for commit: "
-							+ destLogId.toString() + " with commit type: "
-							+ destLogId.getCommitType());
-					destLogIds.add(destLogId);
-				}
+				
+				if (destLogId == null) 
+					destLogId = logId;
+				
+				// NEVER DELETE A LOCK.
+				destLogId.setCommitType(LogId.ONLY_UNLOCK);
+				sysout(trxId, "Adding this destLogId for commit: "
+						+ destLogId.toString() + " with commit type: "
+						+ destLogId.getCommitType());
+				destLogIds.add(destLogId);
 			}
 			allUpdates.add(updates);
 			toBeUnlockedDestLogIds.add(destLogIds);

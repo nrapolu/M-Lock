@@ -33,6 +33,7 @@ public class WALManagerDistTxnEndpointRefactored extends WALManagerDistTxnEndpoi
 		implements WALManagerDistTxnProtocol {
 	RemoteWALCommunicator remoteWALCommunicator = null;
 	
+	private boolean debug = false;
 	public static void sysout(String otp) {
 		 //System.out.println(otp);
 	}
@@ -131,7 +132,9 @@ public class WALManagerDistTxnEndpointRefactored extends WALManagerDistTxnEndpoi
 			// Execute the local transaction on the logId using the fetched snapshot.
 			int globalId = localIdToGlobalIdMap.get(localId);
 			final LogId logId = logIdList.get(globalId);
-			sysout("Inside Commit per entity group, processing logId: "
+			
+			if (debug)
+				sysout("Inside Commit per entity group, processing logId: "
 					+ logId.toString());
 			// Final readSet to be "checked" and final writeSet to be committed.
 			Map<byte[], Set<ImmutableBytesWritable>> readSets = new TreeMap<byte[], Set<ImmutableBytesWritable>>(
@@ -146,13 +149,6 @@ public class WALManagerDistTxnEndpointRefactored extends WALManagerDistTxnEndpoi
 			List<LogId> destLogIds = toBeUnlockedDestLogIds.get(globalId);
 			final List<ImmutableBytesWritable> toBeUnlockedKeys = new LinkedList<ImmutableBytesWritable>();
 			final List<Integer> commitTypeInfo = new LinkedList<Integer>();
-
-			byte[] versionColName = Bytes.toBytes(Bytes
-					.toString(WALTableProperties.dataTableName)
-					+ Write.nameDelimiter
-					+ Bytes.toString(WALTableProperties.dataFamily)
-					+ Write.nameDelimiter
-					+ Bytes.toString(WALTableProperties.versionColumn));
 
 			for (int updateIndex = 0; updateIndex < updates.size(); updateIndex++) {
 				Put put = updates.get(updateIndex);
@@ -228,7 +224,9 @@ public class WALManagerDistTxnEndpointRefactored extends WALManagerDistTxnEndpoi
 							valueWriteToOrigKey.setKey(put.getRow());
 							valueWriteToOrigKey.setValue(kv.getValue());
 							finalWrites.add(valueWriteToOrigKey);
-							sysout("Final to-be-committed Write using data from " + "store: "
+
+							if (debug)
+								sysout("Final to-be-committed Write using data from " + "store: "
 									+ valueWriteToOrigKey.toString());
 						}
 					}
@@ -377,7 +375,9 @@ public class WALManagerDistTxnEndpointRefactored extends WALManagerDistTxnEndpoi
 						transactionId, logs.get(logIndex), key,
 						destLogId, key);
 				finalLockPositionList.add(finalLockPosition);
-				sysout("For key: " + Bytes.toString(key.get()) + 
+				
+				if (debug)
+					sysout("For key: " + Bytes.toString(key.get()) + 
 						", finalLockPosition returned: " + Bytes.toString(finalLockPosition.get()));
 			} else {
 				ImmutableBytesWritable key = keys.get(logIndex).get(keyIndex);
@@ -385,7 +385,9 @@ public class WALManagerDistTxnEndpointRefactored extends WALManagerDistTxnEndpoi
 						transactionId, logs.get(logIndex), key,
 						destLogId, key);
 				finalLockPositionList.add(finalLockPosition);
-				sysout("For key: " + Bytes.toString(key.get()) + 
+				
+				if (debug)
+					sysout("For key: " + Bytes.toString(key.get()) + 
 						", finalLockPosition returned: " + Bytes.toString(finalLockPosition.get()));
 			}
 		}

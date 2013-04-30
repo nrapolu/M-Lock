@@ -62,6 +62,7 @@ public class LockMigrator extends HasThread implements Runnable {
 	ReentrantLock overallMigrationLock = new ReentrantLock();
 	HTable logTable = null;
 	
+	private boolean debug = false;
 	public static void sysout(String otp) {
 		//System.out.println(otp);
 	}
@@ -121,8 +122,6 @@ public class LockMigrator extends HasThread implements Runnable {
 		// migration coprocessor requests for all involved logTable regions.
 		// The destination logId will be generated using the unique client id of this 
 		// LockMigrator.
-		// Flush the present migration map, if needed.
-		afterMigrationKeyMap.clear();
 		final LogId destLogId = new LogId();
 		// We salt the key at the end to decrease the possibility of hotspot. This is done by
 		// prefixing it with a random number between 0 and 100.
@@ -144,14 +143,32 @@ public class LockMigrator extends HasThread implements Runnable {
 		// TODO: Extend this to consider several lockSets at once.
 		List<byte[]> lockSet = lockSetsToMigrate.get(0);
 
+		// BIG CHANGE: First, we check if the afterMigrationKeyMap already has the migration
+		// information of the keys needed by this transaction. If it does, then we just return, as the
+		// function which acquires locks will anyway check in the afterMigrationMap to determine
+		// the finalLockPosition.
+		// TODO: We need to add functionality in the lock acquire function to delete the cached
+		// entries in afterMigrationMap if it encounters a lock-miss, and so aborting.
+		// Presently, I'm not sure if the lock acquisition function does a lock-miss check and abort. 
+		List<byte[]> locksNotInCache = new LinkedList<byte[]>();
+		for (byte[] lockBytes: lockSet) {
+			ImmutableBytesWritable lock = new ImmutableBytesWritable(lockBytes);
+			if (afterMigrationKeyMap.get(lock) == null)
+				locksNotInCache.add(lock.get());
+		}
+		
+		// Return if we've found all locks in cache.
+		if (locksNotInCache.isEmpty())
+			return;
+		
 		TreeMap<LogId, List<ImmutableBytesWritable>> logIdToKeyMap = new TreeMap<LogId, 
 			List<ImmutableBytesWritable>>(new DistTxnState.LogIdComparator());
 		// We assume that in the list of Get requests sent to this function, no two
 		// of them
 		// are for the same row.
 		HashMap<ImmutableBytesWritable, Integer> getRowToIndexMap = new HashMap<ImmutableBytesWritable, Integer>();
-		for (int index = 0; index < lockSet.size(); index++) {
-			byte[] key = lockSet.get(index);
+		for (int index = 0; index < locksNotInCache.size(); index++) {
+			byte[] key = locksNotInCache.get(index);
 			LogId logId = WALTableProperties.getLogIdForKey(key);
 			List<ImmutableBytesWritable> keyList = logIdToKeyMap.get(logId);
 			if (keyList == null) {
@@ -236,7 +253,10 @@ public class LockMigrator extends HasThread implements Runnable {
 			assert(migratedLockPositions.size() == keyList.size());
 			for (int j = 0; j < keyList.size(); j++) {
 				ImmutableBytesWritable key = keyList.get(j);
-				sysout ("For logId: " + origLogId.toString() + ", key: " + Bytes.toString(key.get()));
+				
+				if (debug)
+					sysout ("For logId: " + origLogId.toString() + ", key: " + Bytes.toString(key.get()));
+				
 				ImmutableBytesWritable migratedLockPosition = migratedLockPositions.get(j);
 				boolean isMigrated = false;
 				LogId migratedLogId = WALTableProperties.getLogIdFromMigratedKey(migratedLockPosition.get());
@@ -247,11 +267,19 @@ public class LockMigrator extends HasThread implements Runnable {
 				if (isMigrated) {
 					migratedLogId.setCommitType(LogId.ONLY_DELETE);
 					afterMigrationKeyMap.put(key, migratedLogId);
-					sysout ("migrated logId is: " + migratedLogId.toString());
+					
+					if (debug) {
+						sysout ("migrated logId is: " + migratedLogId.toString());
+						sysout ("migrated lock position is: " + Bytes.toString(migratedLockPosition.get()));
+					}
 				} else {
 					migratedLogId.setCommitType(LogId.ONLY_UNLOCK);
 					afterMigrationKeyMap.put(key, migratedLogId);
-					sysout ("migrated logId is: " + migratedLogId.toString());
+					
+					if (debug) {
+						sysout ("migrated logId is: " + migratedLogId.toString());
+						sysout ("migrated lock position is: " + Bytes.toString(migratedLockPosition.get()));
+					}
 				}
 			}
 		}
